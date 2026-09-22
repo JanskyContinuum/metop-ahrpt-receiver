@@ -1,0 +1,32 @@
+# Recordings and generated decoder output (never add the local capture).
+*.cs16
+*.cadu
+*.bin
+decoded/
+output/
+debug/
+
+# MATLAB/Simulink generated files.
+*.slxc
+slprj/
+*_ert_rtw/
+*_grt_rtw/
+
+# Out-of-source builds and temporary compiler products.
+build/
+build-*/
+cmake-build-*/
+out/
+CMakeFiles/
+CMakeCache.txt
+Testing/
+*.exe
+*.dll
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+
+# Future small reference fixtures need documented provenance and explicit names.
+# M1 generates all fixtures in memory or in the build directory.
