@@ -10,6 +10,11 @@ namespace metop {
 struct RunStatistics {
     std::uintmax_t input_size = 0;
     CaduStatistics cadu;
+    // Diagnostic bit extractions only: not RS-validated VCDU headers.
+    std::array<std::uint64_t, 64> vcids_before{};
+    std::array<std::uint64_t, 64> vcids_after{};
+    std::array<std::uint64_t, 4> versions_after{};
+    std::array<std::uint64_t, 256> spacecraft_after{};
     bool stopped_by_limit = false;
 };
 

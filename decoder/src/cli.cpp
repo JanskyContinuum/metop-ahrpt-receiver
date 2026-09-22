@@ -8,7 +8,7 @@ namespace metop {
 
 std::string_view usage() {
     return "Usage: metop_decoder <input.cadu> --out <directory> [options]\n"
-           "M1: validate CADU framing only; no RS, packet, or image decoding.\n"
+           "M2: CADU derandomization and header diagnostics; RS not applied.\n"
            "  --max-cadus N  Stop after N accepted CADUs (positive integer)\n"
            "  --dump-stats   Print full statistics; stats.txt/json are always saved\n"
            "  --verbose      Log each accepted CADU index and file offset\n"

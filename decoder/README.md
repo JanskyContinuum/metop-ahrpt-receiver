@@ -1,9 +1,9 @@
-# C++ CADU decoder — Milestone 1
+# C++ CADU decoder — Milestone 2
 
-M1 implements **CADU framing inspection only**. It reads a binary file, validates
-the `1A CF FC 1D` attached sync marker (ASM), recovers byte alignment, and saves
-framing statistics. It does not yet derandomize, correct Reed-Solomon errors,
-parse VCDUs/packets, or create images. Options for those later stages are rejected.
+M1 provides CADU framing inspection; M2 adds the **CCSDS derandomizer and header
+diagnostics**. The decoder validates the `1A CF FC 1D` ASM, recovers byte alignment,
+and XORs all 1020 following bytes. RS correction, full VCDU/M-PDU parsing, packets,
+and images are not yet implemented. Output explicitly reports `rs_applied: false`.
 
 MATLAB/Simulink performs the existing physical-layer processing, including QPSK
 demodulation, Viterbi decoding, and CADU alignment. Its binary output is the input
@@ -53,8 +53,8 @@ multi-configuration builds normally produce `build/Release/metop_decoder.exe`.
 Quote paths containing spaces. Windows uses its native wide command line so
 non-ASCII paths work without changing the system code page. Arguments on other
 platforms are interpreted as UTF-8. The input must be a regular, static binary file.
-The input bytes are never modified; the reader retains the entire CADU including
-the ASM. No instrument or payload contents are inspected in M1.
+The input file is never modified; the reader retains the entire CADU including
+the ASM. M2 derandomizes its in-memory copy; the ASM is preserved.
 
 Exit codes:
 
@@ -81,8 +81,8 @@ reported as trailing bytes on the next read.
 
 This conservative recovery can omit an otherwise good last CADU after loss of
 alignment. It avoids silently accepting an isolated payload marker as a recovered
-boundary. Even two matching markers cannot establish payload integrity; M1 cannot
-detect or correct payload errors. Derandomization and RS validation are later work.
+boundary. Even two matching markers cannot establish payload integrity; these
+milestones cannot detect or correct payload errors. RS validation is later work.
 
 The reader uses a fixed 1028-byte circular lookahead buffer and returns one CADU
 at a time. Memory use does not grow with capture size. Tests compare every emitted
@@ -90,8 +90,12 @@ byte and its original offset, including recovery across circular-buffer wraps.
 
 ## Statistics definitions
 
-The JSON declares `schema_version: 1` and `stage: "cadu_framing"`. It deliberately
-contains no RS, VCID, APID, or image statistics while those stages are absent.
+The JSON declares `schema_version: 2`, `stage: "derandomization_diagnostics"`, and
+`rs_applied: false`. CADU counters retain their M1 meanings. Sparse histograms
+`vcids_before`, `vcids_after`, `versions_after`, and `spacecraft_after` contain
+observations from every accepted CADU; no unexpected values are filtered out.
+They are diagnostic bit extractions, not RS-validated headers. APID and image
+statistics remain absent.
 
 | Field | Meaning |
 | --- | --- |
@@ -164,6 +168,44 @@ Stopped by limit: no
 These results establish M1 framing behaviour, not the integrity or meaning of the
 1020 bytes after each ASM. No M2 functionality was used for this validation.
 
+## M2 randomizer and validation
+
+The implementation generates a constant XOR mask from the legacy CCSDS
+polynomial `x^8 + x^7 + x^5 + x^3 + 1`. State bit j holds sequence bit s[n+j];
+the emitted bit is s[n], and the feedback is s[n+7] XOR s[n+5] XOR s[n+3] XOR s[n].
+Output is packed MSB first. Every call applies the mask from its all-ones origin,
+including all 128 parity bytes and excluding the ASM.
+
+Reference: CCSDS 131.0-B-5, sections 10.4.2–10.4.4, which retain this 255-bit
+sequence for legacy systems. We deliberately use the MetOp-specified legacy
+sequence, not the newer 17-bit randomizer in the same standard.
+
+All **42 tests passed** in the Windows Release build. Five new tests check the
+standard `FF 48 0E C0 9A` prefix, XOR round-trip, independent calls, 255-bit period
+through the full 1020 bytes, and protected ASM/end boundaries. CLI fixtures use a
+fixed independently specified randomized header prefix and verify all diagnostic
+counts. A full CVCDU is 32 PN periods long, so the reset test alone cannot detect
+continuous-state code; the implementation avoids mutable PN state entirely.
+
+Local capture observations after XOR (13,538 CADUs, framing unchanged):
+
+| Diagnostic | Count |
+| --- | ---: |
+| Version 1 | 13,418 |
+| Other versions | 120 |
+| Spacecraft ID 11 | 13,096 |
+| VCID 9 | 2,685 |
+| VCID 10 | 6,259 |
+| VCID 24 | 1,705 |
+| VCID 63 | 1,921 |
+
+The dominant version/spacecraft and expected VCIDs support the chosen randomizer
+phase. Outliers remain recorded and uncorrected. XOR maps each VCID to another
+VCID, so the VCID histogram's shape alone cannot prove correct randomization.
+Version and spacecraft diagnostics provide additional evidence. If version 1
+or VCID 9 is absent, stderr requests investigation before packet work; M2 still
+saves diagnostics, without claiming instrument decoding succeeded.
+
 ## Requirements and subsequent work
 
 The current engineering specification is `../CODEX_METOP_CADU_AVHRR_DECODER.md`
@@ -173,7 +215,7 @@ that specification. Protocol references for subsequent stages include
 [EUMETSAT TD18](https://user.eumetsat.int/s3/eup-strapi-media/TD_18_Metop_Direct_Readout_AHRPT_Technical_Description_v3_A_1cb789b653.pdf)
 and [CCSDS TM Synchronization and Channel Coding](https://ccsds.org/Pubs/131x0b5.pdf).
 
-M2 will add the CCSDS derandomizer and diagnostic VCID histogram. It is not part
-of M1. Packet reassembly, RS correction, and AVHRR inspection follow separately.
+M3 will add full VCDU/M-PDU parsing in explicit `--no-rs` development mode.
+Packet reassembly, RS correction, and AVHRR inspection follow separately.
 AVHRR sample offsets and scan-to-packet mapping must be verified before instrument
 decoding. The eventual raw image width is exactly 2048 Earth-view samples.

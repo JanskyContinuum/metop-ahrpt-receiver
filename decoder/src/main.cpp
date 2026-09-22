@@ -1,4 +1,5 @@
 #include "cadu_reader.h"
+#include "ccsds_randomizer.h"
 #include "cli.h"
 #include "statistics.h"
 
@@ -48,10 +49,16 @@ int run(std::span<const std::string_view> arguments) {
         statistics.input_size = std::filesystem::file_size(options.input);
         metop::CaduReader reader(input);
         while (!options.max_cadus || reader.statistics().cadus_read < *options.max_cadus) {
-            const auto cadu = reader.next();
+            auto cadu = reader.next();
             if (!cadu) {
                 break;
             }
+            ++statistics.vcids_before[cadu->bytes[5] & 0x3f];
+            metop::derandomize(std::span(cadu->bytes).subspan<4, metop::cvcdu_size>());
+            ++statistics.vcids_after[cadu->bytes[5] & 0x3f];
+            ++statistics.versions_after[cadu->bytes[4] >> 6];
+            const auto spacecraft = ((cadu->bytes[4] & 0x3f) << 2) | (cadu->bytes[5] >> 6);
+            ++statistics.spacecraft_after[static_cast<std::size_t>(spacecraft)];
             if (options.verbose) {
                 std::cerr << "CADU " << cadu->index << " offset " << cadu->file_offset << '\n';
             }
@@ -63,7 +70,7 @@ int run(std::span<const std::string_view> arguments) {
         if (options.dump_stats) {
             metop::write_text_statistics(std::cout, statistics);
         } else {
-            std::cout << "M1 framing: " << statistics.cadu.cadus_read << " CADUs, "
+            std::cout << "M2 diagnostics (RS not applied): " << statistics.cadu.cadus_read << " CADUs, "
                       << statistics.cadu.resyncs << " resyncs, "
                       << statistics.cadu.skipped_bytes << " skipped bytes, "
                       << statistics.cadu.trailing_bytes << " trailing bytes"
@@ -71,6 +78,9 @@ int run(std::span<const std::string_view> arguments) {
         }
         if (statistics.cadu.asm_failures || statistics.cadu.trailing_bytes) {
             std::cerr << "Framing anomalies detected; inspect stats.txt or stats.json.\n";
+        }
+        if (statistics.cadu.cadus_read && (!statistics.versions_after[1] || !statistics.vcids_after[9])) {
+            std::cerr << "Header sanity check incomplete: inspect version/VCID histograms before packet work.\n";
         }
         if (statistics.cadu.cadus_read == 0) {
             std::cerr << "No complete validated CADUs found.\n";
