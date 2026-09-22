@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cadu_reader.h"
+#include "frame_inspector.h"
 
 #include <filesystem>
 #include <iosfwd>
@@ -15,6 +16,7 @@ struct RunStatistics {
     std::array<std::uint64_t, 64> vcids_after{};
     std::array<std::uint64_t, 4> versions_after{};
     std::array<std::uint64_t, 256> spacecraft_after{};
+    std::optional<FrameStatistics> frames;
     bool stopped_by_limit = false;
 };
 

@@ -6,6 +6,16 @@
 
 namespace metop {
 namespace {
+auto frame_counters(const FrameStatistics& f) {
+    return std::array<std::pair<std::string_view, std::uint64_t>, 13>{{
+        {"headers", f.headers}, {"invalid_versions", f.invalid_versions},
+        {"idle_frames", f.idle_frames}, {"nonzero_signaling_spare", f.nonzero_signaling_spare},
+        {"valid_mpdus", f.valid_mpdus}, {"invalid_fhp", f.invalid_fhp},
+        {"nonzero_mpdu_spare", f.nonzero_mpdu_spare}, {"packet_start_zones", f.packet_start_zones},
+        {"continuation_zones", f.continuation_zones}, {"idle_zones", f.idle_zones},
+        {"counter_gaps", f.counter_gaps}, {"counter_duplicates", f.counter_duplicates},
+        {"counter_backward_or_reset", f.counter_backward_or_reset}}};
+}
 template<std::size_t N>
 void histogram_json(std::ostream& output, const std::array<std::uint64_t, N>& values) {
     output << '{';
@@ -28,7 +38,8 @@ void histogram_text(std::ostream& output, const char* label, const std::array<st
 
 void write_text_statistics(std::ostream& output, const RunStatistics& statistics) {
     const auto& c = statistics.cadu;
-    output << "Stage: M2 derandomization diagnostics (RS not applied)\n"
+    output << "Stage: " << (statistics.frames ? "M3 VCDU/M-PDU inspection" : "M2 derandomization diagnostics")
+           << " (RS not applied)\n"
            << "Input size: " << statistics.input_size << " bytes\n"
            << "CADUs read: " << c.cadus_read << '\n'
            << "Valid ASM: " << c.valid_asm << '\n'
@@ -45,11 +56,18 @@ void write_text_statistics(std::ostream& output, const RunStatistics& statistics
     histogram_text(output, "VCID after XOR (uncorrected)", statistics.vcids_after);
     histogram_text(output, "Version after XOR (uncorrected)", statistics.versions_after);
     histogram_text(output, "Spacecraft ID after XOR (uncorrected)", statistics.spacecraft_after);
+    if (statistics.frames) {
+        output << "VCDU/M-PDU (uncorrected):\n";
+        for (const auto& [name, value] : frame_counters(*statistics.frames)) output << "  " << name << ": " << value << '\n';
+        histogram_text(output, "Version-1 VCIDs", statistics.frames->vcids);
+        histogram_text(output, "Counter discontinuities by VCID", statistics.frames->discontinuities_by_vcid);
+    }
 }
 
 void write_json_statistics(std::ostream& output, const RunStatistics& statistics) {
     const auto& c = statistics.cadu;
-    output << "{\n  \"schema_version\": 2,\n  \"stage\": \"derandomization_diagnostics\",\n"
+    output << "{\n  \"schema_version\": 3,\n  \"stage\": \""
+           << (statistics.frames ? "vcdu_mpdu_no_rs" : "derandomization_diagnostics") << "\",\n"
            << "  \"rs_applied\": false,\n"
            << "  \"input_size\": " << statistics.input_size << ",\n"
            << "  \"stopped_by_limit\": " << (statistics.stopped_by_limit ? "true" : "false") << ",\n"
@@ -72,6 +90,15 @@ void write_json_statistics(std::ostream& output, const RunStatistics& statistics
     histogram_json(output, statistics.versions_after);
     output << ",\n  \"spacecraft_after\": ";
     histogram_json(output, statistics.spacecraft_after);
+    if (statistics.frames) {
+        output << ",\n  \"frames\": {\n";
+        for (const auto& [name, value] : frame_counters(*statistics.frames)) output << "    \"" << name << "\": " << value << ",\n";
+        output << "    \"vcids\": ";
+        histogram_json(output, statistics.frames->vcids);
+        output << ",\n    \"discontinuities_by_vcid\": ";
+        histogram_json(output, statistics.frames->discontinuities_by_vcid);
+        output << "\n  }";
+    }
     output << "\n}\n";
 }
 

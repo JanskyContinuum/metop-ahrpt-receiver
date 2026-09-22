@@ -14,6 +14,7 @@ struct Options {
     std::optional<std::uint64_t> max_cadus;
     bool dump_stats = false;
     bool verbose = false;
+    bool no_rs = false;
     bool help = false;
 };
 

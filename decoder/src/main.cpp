@@ -2,6 +2,7 @@
 #include "ccsds_randomizer.h"
 #include "cli.h"
 #include "statistics.h"
+#include "frame_inspector.h"
 
 #include <filesystem>
 #include <fstream>
@@ -37,7 +38,8 @@ int run(std::span<const std::string_view> arguments) {
             throw std::runtime_error("Cannot open input file");
         }
         // Prevent a user-selected input (including a hard link) being overwritten by stats.
-        for (const auto* name : {"stats.txt", "stats.json"}) {
+        for (const auto* name : {"stats.txt", "stats.json", "vcdu_log.csv"}) {
+            if (!options.no_rs && std::string_view(name) == "vcdu_log.csv") continue;
             const auto destination = options.output / name;
             if (std::filesystem::exists(destination)
                 && std::filesystem::equivalent(options.input, destination)) {
@@ -47,6 +49,14 @@ int run(std::span<const std::string_view> arguments) {
         std::filesystem::create_directories(options.output);
         metop::RunStatistics statistics;
         statistics.input_size = std::filesystem::file_size(options.input);
+        std::ofstream frame_log;
+        std::optional<metop::FrameInspector> inspector;
+        if (options.no_rs) {
+            frame_log.open(options.output / "vcdu_log.csv", std::ios::binary | std::ios::trunc);
+            if (!frame_log) throw std::runtime_error("Cannot open VCDU log");
+            inspector.emplace(frame_log);
+            std::cerr << "--no-rs: VCDU/M-PDU inspection uses uncorrected data; parity is ignored.\n";
+        }
         metop::CaduReader reader(input);
         while (!options.max_cadus || reader.statistics().cadus_read < *options.max_cadus) {
             auto cadu = reader.next();
@@ -59,6 +69,8 @@ int run(std::span<const std::string_view> arguments) {
             ++statistics.versions_after[cadu->bytes[4] >> 6];
             const auto spacecraft = ((cadu->bytes[4] & 0x3f) << 2) | (cadu->bytes[5] >> 6);
             ++statistics.spacecraft_after[static_cast<std::size_t>(spacecraft)];
+            if (inspector) inspector->inspect(cadu->index, cadu->file_offset,
+                std::span(cadu->bytes).subspan<4, metop::vcdu_size>());
             if (options.verbose) {
                 std::cerr << "CADU " << cadu->index << " offset " << cadu->file_offset << '\n';
             }
@@ -66,11 +78,17 @@ int run(std::span<const std::string_view> arguments) {
         statistics.cadu = reader.statistics();
         statistics.stopped_by_limit = options.max_cadus
             && statistics.cadu.cadus_read == *options.max_cadus;
+        if (inspector) {
+            statistics.frames = inspector->statistics();
+            frame_log.close();
+            if (!frame_log) throw std::runtime_error("Failed to close VCDU log");
+        }
         metop::save_statistics(options.output, statistics);
         if (options.dump_stats) {
             metop::write_text_statistics(std::cout, statistics);
         } else {
-            std::cout << "M2 diagnostics (RS not applied): " << statistics.cadu.cadus_read << " CADUs, "
+            std::cout << (options.no_rs ? "M3 inspection" : "M2 diagnostics")
+                      << " (RS not applied): " << statistics.cadu.cadus_read << " CADUs, "
                       << statistics.cadu.resyncs << " resyncs, "
                       << statistics.cadu.skipped_bytes << " skipped bytes, "
                       << statistics.cadu.trailing_bytes << " trailing bytes"
@@ -85,6 +103,17 @@ int run(std::span<const std::string_view> arguments) {
         if (statistics.cadu.cadus_read == 0) {
             std::cerr << "No complete validated CADUs found.\n";
             return 1;
+        }
+        if (statistics.frames) {
+            const auto& frames = *statistics.frames;
+            if (frames.invalid_versions || frames.invalid_fhp || frames.nonzero_mpdu_spare
+                || frames.nonzero_signaling_spare || frames.counter_gaps || frames.counter_duplicates
+                || frames.counter_backward_or_reset)
+                std::cerr << "Uncorrected frame anomalies detected; inspect vcdu_log.csv and statistics.\n";
+            if (!frames.valid_mpdus) {
+                std::cerr << "No structurally valid M-PDUs found in --no-rs mode.\n";
+                return 1;
+            }
         }
         return 0;
     } catch (const std::exception& error) {

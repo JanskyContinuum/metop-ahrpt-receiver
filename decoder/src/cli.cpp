@@ -9,6 +9,7 @@ namespace metop {
 std::string_view usage() {
     return "Usage: metop_decoder <input.cadu> --out <directory> [options]\n"
            "M2: CADU derandomization and header diagnostics; RS not applied.\n"
+           "  --no-rs        Enable M3 VCDU/M-PDU inspection, bypassing RS explicitly\n"
            "  --max-cadus N  Stop after N accepted CADUs (positive integer)\n"
            "  --dump-stats   Print full statistics; stats.txt/json are always saved\n"
            "  --verbose      Log each accepted CADU index and file offset\n"
@@ -49,6 +50,9 @@ Options parse_options(std::span<const std::string_view> arguments) {
                 throw std::invalid_argument("--max-cadus requires a positive 64-bit integer");
             }
             options.max_cadus = count;
+        } else if (argument == "--no-rs") {
+            duplicate(options.no_rs);
+            options.no_rs = true;
         } else if (argument == "--dump-stats") {
             duplicate(options.dump_stats);
             options.dump_stats = true;

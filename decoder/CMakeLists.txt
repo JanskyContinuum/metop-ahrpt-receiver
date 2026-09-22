@@ -5,7 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(metop_core src/cadu_reader.cpp src/cli.cpp src/statistics.cpp src/ccsds_randomizer.cpp)
+add_library(metop_core src/cadu_reader.cpp src/cli.cpp src/statistics.cpp
+    src/ccsds_randomizer.cpp src/vcdu.cpp src/mpdu.cpp src/frame_inspector.cpp)
 target_include_directories(metop_core PUBLIC src)
 add_executable(metop_decoder src/main.cpp)
 target_link_libraries(metop_decoder PRIVATE metop_core)
@@ -26,6 +27,13 @@ metop_warnings(metop_decoder)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(frame_tests tests/frame_tests.cpp)
+    target_link_libraries(frame_tests PRIVATE metop_core)
+    metop_warnings(frame_tests)
+    foreach(case IN ITEMS vcdu_header vcdu_lengths mpdu_lengths fhp_0 fhp_100 fhp_881
+            fhp_882 fhp_2045 fhp_2046 fhp_2047 counter_wrap counter_events counter_streams inspector)
+        add_test(NAME frame.${case} COMMAND frame_tests ${case})
+    endforeach()
     add_executable(randomizer_tests tests/randomizer_tests.cpp)
     target_link_libraries(randomizer_tests PRIVATE metop_core)
     metop_warnings(randomizer_tests)
@@ -42,6 +50,7 @@ if(BUILD_TESTING)
     endforeach()
 
     foreach(case IN ITEMS help valid unicode_paths limit exact_limit empty garbage truncated recovered
+            no_rs no_rs_invalid no_rs_idle no_rs_log_collision no_rs_duplicate
             missing_input missing_out unknown_option invalid_limit zero_limit
             overflow_limit negative_limit missing_value duplicate_option extra_input output_failure
             statistics_failure input_collision)

@@ -1,9 +1,11 @@
-# C++ CADU decoder — Milestone 2
+# C++ CADU decoder — Milestone 3
 
 M1 provides CADU framing inspection; M2 adds the **CCSDS derandomizer and header
 diagnostics**. The decoder validates the `1A CF FC 1D` ASM, recovers byte alignment,
-and XORs all 1020 following bytes. RS correction, full VCDU/M-PDU parsing, packets,
-and images are not yet implemented. Output explicitly reports `rs_applied: false`.
+and XORs all 1020 following bytes. M3 adds **VCDU/M-PDU inspection with explicit
+`--no-rs`**. RS correction, packet reassembly, and images are not yet implemented.
+Output explicitly reports `rs_applied: false`. Without `--no-rs`, the program
+retains M2 diagnostic behaviour and does not invoke the VCDU/M-PDU parsers.
 
 MATLAB/Simulink performs the existing physical-layer processing, including QPSK
 demodulation, Viterbi decoding, and CADU alignment. Its binary output is the input
@@ -40,14 +42,16 @@ multi-configuration builds normally produce `build/Release/metop_decoder.exe`.
 ```powershell
 .\build\metop_decoder.exe metop_output.cadu --out decoded --dump-stats
 .\build\metop_decoder.exe metop_output.cadu --out decoded --max-cadus 100 --verbose
+.\build\metop_decoder.exe metop_output.cadu --out decoded --no-rs --dump-stats
 ```
 
-| Option | M1 behaviour |
+| Option | Implemented behaviour |
 | --- | --- |
 | `--out DIR` | Required; create DIR and write `stats.txt` and `stats.json`. Existing statistics files are replaced. |
-| `--dump-stats` | Print the full framing statistics instead of the short summary. |
+| `--dump-stats` | Print full statistics for the selected mode instead of the short summary. |
 | `--max-cadus N` | Stop after N accepted CADUs; N must be a positive 64-bit integer. |
 | `--verbose` | Write each accepted CADU's zero-based ordinal and original byte offset to stderr. |
+| `--no-rs` | M3: inspect VCDUs/M-PDUs without RS and write `vcdu_log.csv` in DIR. |
 | `--help` | Show usage without opening input/output files. |
 
 Quote paths containing spaces. Windows uses its native wide command line so
@@ -58,10 +62,11 @@ the ASM. M2 derandomizes its in-memory copy; the ASM is preserved.
 
 Exit codes:
 
-- **0:** at least one complete CADU accepted (or help displayed). Recoverable
-  framing anomalies are reported to stderr and in statistics, without stopping
-  the entire run.
-- **1:** no accepted CADUs, or an input/output failure. Empty, garbage-only, and
+- **0:** at least one complete CADU accepted and, in `--no-rs` mode, at least one
+  M-PDU with a valid FHP (or help displayed). Recoverable anomalies are reported
+  to stderr and in statistics, without stopping the entire run.
+- **1:** no accepted CADUs, no M-PDUs with valid FHPs in `--no-rs` mode, or an
+  input/output failure. Empty, garbage-only, and
   truncated-only files still produce statistics when output is writable.
 - **2:** invalid command-line arguments.
 
@@ -90,12 +95,13 @@ byte and its original offset, including recovery across circular-buffer wraps.
 
 ## Statistics definitions
 
-The JSON declares `schema_version: 2`, `stage: "derandomization_diagnostics"`, and
-`rs_applied: false`. CADU counters retain their M1 meanings. Sparse histograms
+The JSON declares `schema_version: 3`, `stage: "derandomization_diagnostics"`
+(default) or `"vcdu_mpdu_no_rs"`, and `rs_applied: false`. CADU counters retain
+their M1 meanings. Sparse histograms
 `vcids_before`, `vcids_after`, `versions_after`, and `spacecraft_after` contain
 observations from every accepted CADU; no unexpected values are filtered out.
 They are diagnostic bit extractions, not RS-validated headers. APID and image
-statistics remain absent.
+statistics remain absent. `frames` is present only in explicit `--no-rs` mode.
 
 | Field | Meaning |
 | --- | --- |
@@ -206,6 +212,114 @@ Version and spacecraft diagnostics provide additional evidence. If version 1
 or VCID 9 is absent, stderr requests investigation before packet work; M2 still
 saves diagnostics, without claiming instrument decoding succeeded.
 
+## M3 VCDU/M-PDU inspection
+
+After derandomizing all 1020 CVCDU bytes, `--no-rs` takes exactly bytes 0–891 as
+the uncorrected VCDU and bypasses parity bytes 892–1019. There is no dummy RS
+decoder or claim that parity was checked. Separate modules implement `vcdu`,
+`mpdu`, and `frame_inspector`; the main program orchestrates them.
+
+The parsers require exact input lengths before reading offsets:
+
+```text
+VCDU: 892 bytes = primary header 6 + insert zone 2 + M-PDU 884
+M-PDU: 884 bytes = header 2 + packet zone 882
+```
+
+The VCDU parser uses masks/shifts for the version, spacecraft ID, VCID, 24-bit
+counter, replay flag, and remaining seven signaling bits. The latter are
+preserved under the MetOp profile in the engineering specification. The newer
+AOS count-cycle interpretation is not silently substituted for those bits.
+Both insert-zone bytes are copied into the parsed object and logged.
+
+The inspector rejects versions other than binary `01` before M-PDU inspection.
+VCID 63 is an AOS Only Idle Data frame: it is counted and logged without M-PDU
+or counter processing. Other VCIDs use the M-PDU profile in the specification.
+
+The FHP is masked to **11 bits**; its offset origin is the packet zone, not the
+VCDU or M-PDU header. The parser distinguishes:
+
+- `0..881`: the first new packet starts at that packet-zone byte.
+- `0x7FE`: idle-only zone, distinct from an idle VCID63 frame.
+- `0x7FF`: no new packet starts; continuation only.
+- `882..2045`: invalid FHP; report it without cropping or inventing a boundary.
+
+No packet headers are interpreted in M3. In particular, FHP 881 is valid even
+though only one byte of the new packet's header fits; M4 must retain split headers.
+
+Spare bits are preserved and counted separately. The AOS reference convention is
+zero for the five M-PDU spare bits, but the actual capture frequently carries
+`FF FF`, meaning spare=31 and FHP=2047. The engineering specification defines the
+low 11-bit pointer without a required spare value. We therefore **do not reject
+an otherwise in-range FHP for nonzero spare bits**. A mission-specific spare-bit
+conformance rule still needs verification; these counts are not RS-validated
+conformance results. `valid_mpdus` means correct geometry and a valid FHP only.
+
+### Counter continuity and CSV
+
+Continuity state is independent per `(spacecraft ID, VCID, replay)`, so spacecraft
+or replay changes cannot join unrelated VC streams. The 24-bit wrap from
+`0xFFFFFF` to zero is contiguous. Equal counters are duplicates. Forward modular
+steps 2 through `0x7FFFFF` are gaps; larger steps are `backward_or_reset`. After
+an observation, its counter becomes the new baseline. This half-range convention
+is a diagnostic choice; it cannot distinguish corruption, missing frames, and
+resets. No missing-packet or lost-scan count is invented.
+
+`vcdu_log.csv` is always written in `--no-rs` mode and replaced on reruns. It has
+one row per accepted CADU, including invalid versions and idle frames. Columns:
+
+```text
+cadu_index,file_offset,rs_status,version,spacecraft_id,vcid,counter,replay,
+signaling_spare,insert0,insert1,previous_counter,continuity,fhp,mpdu_spare,fhp_kind,status
+```
+
+All numeric fields are decimal. `rs_status` is always `not_applied`. Unchecked
+FHP and previous-counter fields are empty, never fabricated zeros; the raw
+header counter is retained even when its continuity is not checked. Insert bytes remain present even
+on an invalid-version row. Successful structural parsing is labelled
+`uncorrected`; invalid pointers are labelled `invalid_mpdu`.
+
+The JSON `frames` counters count parsed headers, invalid versions, idle frames,
+nonzero spare fields, valid/invalid FHPs, each zone kind, counter gaps, duplicates,
+and backward/reset events. `frames.vcids` includes only version-1 headers;
+`frames.discontinuities_by_vcid` aggregates counter events across spacecraft and
+replay streams while keeping tracking state separate. Thus it differs from the
+unfiltered M2 diagnostic histogram. Anomalies cause a stderr notice; detailed
+evidence stays in CSV/JSON. Packet-state invalidation belongs to M4, which is not
+implemented yet.
+
+### M3 validation result
+
+The Windows Release build passed **61/61 CTest cases**: the existing 42 plus 14
+parser/counter/inspector tests and five `--no-rs` CLI regressions. New tests cover
+exact header fields, borrowed-view bounds, incorrect lengths, FHP 0/100/881/
+882/2045/2046/2047, 24-bit wrap, gaps, duplicates, backwards/reset observations,
+independent streams, FFFF continuation, CSV column consistency, insert bytes,
+idle/invalid-version handling, explicit opt-in, and log/input collision protection.
+
+The local capture produced 13,538 CSV rows:
+
+| Uncorrected observation | Count |
+| --- | ---: |
+| Invalid versions | 120 |
+| Version-1 idle frames (VCID63) | 1,916 |
+| M-PDUs with valid FHP | 10,706 |
+| Out-of-range FHP | 796 |
+| Packet-start zones | 1,545 |
+| Continuation zones | 9,141 |
+| Idle zones | 20 |
+| Nonzero M-PDU spare | 10,340 |
+| Nonzero signaling spare, version-1 frames | 1,118 |
+| Counter gaps | 2,822 |
+| Duplicate counters | 11 |
+| Backward/reset counter events | 668 |
+
+The geometry accounting is `13538 = 120 + 1916 + 10706 + 796`. VCID9 appears in
+2,673 version-1 headers (2,685 before version filtering). Example: CADUs 42–44
+carry spacecraft 11, VCID9, counters 14455–14457, and `FFFF` continuation headers.
+These observations support the parsing offsets but reveal substantial anomalies
+that must remain visible until RS correction and packet reassembly are available.
+
 ## Requirements and subsequent work
 
 The current engineering specification is `../CODEX_METOP_CADU_AVHRR_DECODER.md`
@@ -215,7 +329,9 @@ that specification. Protocol references for subsequent stages include
 [EUMETSAT TD18](https://user.eumetsat.int/s3/eup-strapi-media/TD_18_Metop_Direct_Readout_AHRPT_Technical_Description_v3_A_1cb789b653.pdf)
 and [CCSDS TM Synchronization and Channel Coding](https://ccsds.org/Pubs/131x0b5.pdf).
 
-M3 will add full VCDU/M-PDU parsing in explicit `--no-rs` development mode.
-Packet reassembly, RS correction, and AVHRR inspection follow separately.
+M3 field geometry follows specification sections 7–10. Version, idle-frame,
+counter, and FHP behaviour also reference
+[CCSDS AOS 732.0-B-4](https://ccsds.org/Pubs/732x0b4.pdf), sections 4.1.2 and 4.1.4.2.
+M4 packet reassembly, M5 RS correction, and M6 AVHRR inspection follow separately.
 AVHRR sample offsets and scan-to-packet mapping must be verified before instrument
 decoding. The eventual raw image width is exactly 2048 Earth-view samples.
