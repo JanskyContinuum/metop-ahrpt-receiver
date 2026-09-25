@@ -205,6 +205,29 @@ int main(int argc, char* argv[]) {
             equal(r.consume(frame(3, 0, packet(882))), {packet(882)});
             require(r.statistics().duplicate_frames == 2 && r.statistics().truncated_packets == 1,
                 "Duplicate policy failed");
+        } else if (test.starts_with("duplicate_after_")) {
+            const auto frames = three_frames();
+            equal(r.consume(frames[0]), {});
+            equal(r.consume(frames[1]), {});
+            equal(r.consume(frames[2]), {packet(2000), packet(646, 104)});
+            // Another VC's partial must still be discarded, while counter
+            // history for already delivered packets survives invalidation.
+            equal(r.consume(frame(30, 0, slice(packet(1764), 0, 882), 10)), {});
+            if (test == "duplicate_after_invalid_version") {
+                auto bad = frames[2]; bad[0] &= 0x3f;
+                equal(r.consume(bad), {});
+            } else if (test == "duplicate_after_invalid_size") {
+                equal(r.consume(Bytes(891)), {});
+            } else if (test == "duplicate_after_alignment_loss") {
+                r.invalidate_all();
+            } else throw std::runtime_error("Unknown invalidation case");
+            equal(r.consume(frames[2]), {});
+            require(r.statistics().reconstructed == 2 && r.statistics().duplicate_frames == 1,
+                "Invalidation forgot an already delivered frame");
+            equal(r.consume(frame(31, 0x7ff, slice(packet(1764), 882, 882), 10)), {});
+            equal(r.consume(frame(13, 0, packet(882, 105))), {packet(882, 105)});
+            require(r.statistics().truncated_packets == 1 && r.statistics().reconstructed == 3,
+                "Invalidation retained a partial or blocked subsequent recovery");
         } else if (test == "backward") {
             equal(r.consume(frame(10, 0, slice(packet(2000), 0, 882))), {});
             equal(r.consume(frame(9, 0, packet(882))), {packet(882)});
@@ -272,9 +295,19 @@ int main(int argc, char* argv[]) {
             auto frames = three_frames();
             if (test == "fixture_gap") { frames[1][4] = 12; frames[2][4] = 13; }
             if (test == "fixture_partial") frames.pop_back();
+            if (test == "fixture_duplicate_invalid" || test == "fixture_duplicate_resync") {
+                const auto last = frames.back();
+                if (test == "fixture_duplicate_invalid") {
+                    auto bad = last; bad[0] &= 0x3f;
+                    frames.push_back(bad);
+                }
+                frames.push_back(last);
+                frames.push_back(frame(13, 0, packet(882, 105)));
+            }
             std::size_t index = 0;
             for (const auto& f : frames) {
-                if (test == "fixture_resync" && index == 1) file.put('x');
+                if ((test == "fixture_resync" && index == 1)
+                    || (test == "fixture_duplicate_resync" && index == 3)) file.put('x');
                 ++index;
                 std::array<std::uint8_t, 1024> cadu{0x1a, 0xcf, 0xfc, 0x1d};
                 std::copy(f.begin(), f.end(), cadu.begin() + 4);

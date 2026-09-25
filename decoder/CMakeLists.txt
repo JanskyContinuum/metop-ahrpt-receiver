@@ -33,10 +33,12 @@ if(BUILD_TESTING)
     metop_warnings(packet_tests)
     foreach(case IN ITEMS header lengths three_mpdus boundaries split_headers orphan
             split_prefix segmented_stream idle_between idle_packet gap gap_idle gap_boundary counter_wrap streams
-            duplicate backward mismatch continuation_overrun invalid_header invalid_frame finish maximum)
+            duplicate duplicate_after_invalid_version duplicate_after_invalid_size
+            duplicate_after_alignment_loss backward mismatch continuation_overrun
+            invalid_header invalid_frame finish maximum)
         add_test(NAME packet.${case} COMMAND packet_tests ${case})
     endforeach()
-    foreach(case IN ITEMS complete limit partial gap resync collision output_failure)
+    foreach(case IN ITEMS complete limit partial gap resync duplicate_invalid duplicate_resync collision output_failure)
         add_test(NAME packet_cli.${case} COMMAND ${CMAKE_COMMAND}
             "-DDECODER=$<TARGET_FILE:metop_decoder>"
             "-DFIXTURE=$<TARGET_FILE:packet_tests>"

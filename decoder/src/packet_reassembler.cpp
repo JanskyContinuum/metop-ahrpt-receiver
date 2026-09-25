@@ -21,7 +21,8 @@ void PacketReassembler::invalidate_all() {
         discard(partial);
     }
     partials_.clear();
-    counters_ = {};
+    // Fragment loss does not erase the last observed counter of each stream.
+    // Otherwise a duplicate received after recovery could be delivered again.
 }
 
 // Consume only enough bytes to finish this header/packet. Input is always a

@@ -368,6 +368,8 @@ application-level segments using sequence flags. Those flags are preserved.
   the duplicate frame, preventing repeated delivery. The 24-bit wrap is contiguous.
 - Invalid FHP drops the affected partial. Invalid VCDU version/size or CADU
   alignment loss clears all partials because stream identity is not reliable.
+  Clearing partials preserves per-stream counter history, so duplicates after
+  recovery are still rejected. Use a new reassembler for an independent capture.
 - Unsupported Space Packet versions stop parsing that zone. No search for a
   plausible replacement header is attempted. Recovery requires a later FHP.
 - EOF and `--max-cadus` discard/report unfinished headers and packets. Nothing is
@@ -418,13 +420,16 @@ format, AVHRR layout, or payload validity is claimed.
 
 ### M4 validation
 
-Windows Release (GCC 14.2.0 / MinGW-w64, Ninja, CMake 3.31.5) passes **91/91
-CTest cases**. The 30 added cases cover primary-header masks, length extremes,
+Windows Release (GCC 14.2.0 / MinGW-w64, Ninja, CMake 3.31.5) passes **96/96
+CTest cases**. The 35 added cases cover primary-header masks, length extremes,
 three-M-PDU byte-for-byte reconstruction, all header split positions, a mixed
 100-packet stream, multiple packets per zone, idle insertion, independent streams,
 gaps, duplicate/backward counters, rollover, impossible boundaries, invalid
 headers/frames, EOF/limit partials, CLI recovery after gaps/alignment loss, output
-errors, and input preservation.
+errors, and input preservation. Five regressions cover duplicate rejection after
+invalid VCDU version/size or alignment loss, including CLI CSV/statistics checks
+and recovery at the next valid frame. All five fail before the counter-history
+fix and pass after it.
 
 The three-M-PDU fixture delivers a 2000-byte packet followed by a 646-byte
 packet, exactly 2646 bytes total, without truncations or invalid headers.

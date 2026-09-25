@@ -37,6 +37,7 @@ public:
     std::vector<ReassembledPacket> consume(std::span<const std::uint8_t> vcdu);
     // Call after unknown framing loss, or at EOF / a user-requested processing limit.
     // No incomplete packet is emitted. Repeated calls are harmless.
+    // Counter history is retained; use a new instance for an independent capture.
     void invalidate_all();
     void finish() { invalidate_all(); }
     const PacketStatistics& statistics() const noexcept { return statistics_; }
