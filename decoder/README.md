@@ -30,6 +30,24 @@ put that directory first on the shell's PATH. Avoid mixing MinGW runtime version
 Very long Windows checkout paths can cause CMake object-path warnings; prefer a
 short build directory if your toolchain cannot build at the existing path.
 
+## Continuous integration (CI)
+
+[Decoder CI](https://github.com/JanskyContinuum/metop-ahrpt-receiver/actions/workflows/decoder-ci.yml)
+(`.github/workflows/decoder-ci.yml`) runs on every pull request targeting `main`
+(including subsequent commits) and every push to `main`. It checks out the
+repository on Windows Server 2022, configures `decoder/`, builds all targets in
+Release, and runs the complete CTest suite with failure output. It uses the
+commands above with `-DBUILD_TESTING=ON` at configuration and `--no-tests=error`
+at test time so an accidentally empty test suite fails. No recordings or MATLAB
+installation are required.
+
+Open or update a pull request into `main`, then open its **Checks** tab and the
+**Windows Release** job. A green check means build and tests passed; for a red
+check, open the failed step to read the compiler or CTest output, fix the issue,
+and push another commit to the same branch. Runs are also listed in **Actions**.
+CI does not merge pull requests or by itself make passing checks mandatory for
+merging; requiring the check is a separate branch-protection setting.
+
 ## Run
 
 ```sh
