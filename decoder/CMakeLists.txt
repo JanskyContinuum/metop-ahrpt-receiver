@@ -6,7 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(metop_core src/cadu_reader.cpp src/cli.cpp src/statistics.cpp
-    src/ccsds_randomizer.cpp src/vcdu.cpp src/mpdu.cpp src/frame_inspector.cpp)
+    src/ccsds_randomizer.cpp src/vcdu.cpp src/mpdu.cpp src/frame_inspector.cpp
+    src/space_packet.cpp src/packet_reassembler.cpp)
 target_include_directories(metop_core PUBLIC src)
 add_executable(metop_decoder src/main.cpp)
 target_link_libraries(metop_decoder PRIVATE metop_core)
@@ -27,6 +28,21 @@ metop_warnings(metop_decoder)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(packet_tests tests/packet_tests.cpp)
+    target_link_libraries(packet_tests PRIVATE metop_core)
+    metop_warnings(packet_tests)
+    foreach(case IN ITEMS header lengths three_mpdus boundaries split_headers orphan
+            split_prefix segmented_stream idle_between idle_packet gap gap_idle gap_boundary counter_wrap streams
+            duplicate backward mismatch continuation_overrun invalid_header invalid_frame finish maximum)
+        add_test(NAME packet.${case} COMMAND packet_tests ${case})
+    endforeach()
+    foreach(case IN ITEMS complete limit partial gap resync collision output_failure)
+        add_test(NAME packet_cli.${case} COMMAND ${CMAKE_COMMAND}
+            "-DDECODER=$<TARGET_FILE:metop_decoder>"
+            "-DFIXTURE=$<TARGET_FILE:packet_tests>"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/packet-cli-tests/${case}"
+            "-DCASE=${case}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/packet_cli.cmake")
+    endforeach()
     add_executable(frame_tests tests/frame_tests.cpp)
     target_link_libraries(frame_tests PRIVATE metop_core)
     metop_warnings(frame_tests)

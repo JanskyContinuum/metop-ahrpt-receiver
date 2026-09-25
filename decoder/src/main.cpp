@@ -3,6 +3,7 @@
 #include "cli.h"
 #include "statistics.h"
 #include "frame_inspector.h"
+#include "packet_reassembler.h"
 
 #include <filesystem>
 #include <fstream>
@@ -38,8 +39,9 @@ int run(std::span<const std::string_view> arguments) {
             throw std::runtime_error("Cannot open input file");
         }
         // Prevent a user-selected input (including a hard link) being overwritten by stats.
-        for (const auto* name : {"stats.txt", "stats.json", "vcdu_log.csv"}) {
-            if (!options.no_rs && std::string_view(name) == "vcdu_log.csv") continue;
+        for (const auto* name : {"stats.txt", "stats.json", "vcdu_log.csv", "packet_log.csv"}) {
+            if (!options.no_rs && (std::string_view(name) == "vcdu_log.csv"
+                || std::string_view(name) == "packet_log.csv")) continue;
             const auto destination = options.output / name;
             if (std::filesystem::exists(destination)
                 && std::filesystem::equivalent(options.input, destination)) {
@@ -50,12 +52,20 @@ int run(std::span<const std::string_view> arguments) {
         metop::RunStatistics statistics;
         statistics.input_size = std::filesystem::file_size(options.input);
         std::ofstream frame_log;
+        std::ofstream packet_log;
+        metop::PacketReassembler reassembler;
+        std::uint64_t packet_index = 0;
+        std::uint64_t previous_asm_failures = 0;
         std::optional<metop::FrameInspector> inspector;
         if (options.no_rs) {
             frame_log.open(options.output / "vcdu_log.csv", std::ios::binary | std::ios::trunc);
             if (!frame_log) throw std::runtime_error("Cannot open VCDU log");
             inspector.emplace(frame_log);
-            std::cerr << "--no-rs: VCDU/M-PDU inspection uses uncorrected data; parity is ignored.\n";
+            packet_log.open(options.output / "packet_log.csv", std::ios::binary | std::ios::trunc);
+            if (!packet_log) throw std::runtime_error("Cannot open packet log");
+            packet_log << "packet_index,spacecraft_id,vcid,replay,start_counter,end_counter,"
+                          "apid,seq_flags,seq_count,secondary_header,total_size,rs_status\n";
+            std::cerr << "--no-rs: packet reassembly uses uncorrected data; parity is ignored.\n";
         }
         metop::CaduReader reader(input);
         while (!options.max_cadus || reader.statistics().cadus_read < *options.max_cadus) {
@@ -69,8 +79,22 @@ int run(std::span<const std::string_view> arguments) {
             ++statistics.versions_after[cadu->bytes[4] >> 6];
             const auto spacecraft = ((cadu->bytes[4] & 0x3f) << 2) | (cadu->bytes[5] >> 6);
             ++statistics.spacecraft_after[static_cast<std::size_t>(spacecraft)];
-            if (inspector) inspector->inspect(cadu->index, cadu->file_offset,
-                std::span(cadu->bytes).subspan<4, metop::vcdu_size>());
+            if (inspector) {
+                const auto vcdu = std::span(cadu->bytes).subspan<4, metop::vcdu_size>();
+                inspector->inspect(cadu->index, cadu->file_offset, vcdu);
+                if (reader.statistics().asm_failures != previous_asm_failures)
+                    reassembler.invalidate_all();
+                previous_asm_failures = reader.statistics().asm_failures;
+                for (const auto& packet : reassembler.consume(vcdu)) {
+                    const auto& h = packet.header;
+                    packet_log << packet_index++ << ',' << unsigned(packet.source.spacecraft_id)
+                        << ',' << unsigned(packet.source.vcid) << ',' << packet.source.replay
+                        << ',' << packet.source.counter << ',' << packet.end_counter
+                        << ',' << h.apid << ',' << unsigned(h.sequence_flags) << ',' << h.sequence_count
+                        << ',' << h.secondary_header_flag << ',' << packet.bytes.size() << ",not_applied\n";
+                }
+                if (!packet_log) throw std::runtime_error("Failed to write packet log");
+            }
             if (options.verbose) {
                 std::cerr << "CADU " << cadu->index << " offset " << cadu->file_offset << '\n';
             }
@@ -80,6 +104,10 @@ int run(std::span<const std::string_view> arguments) {
             && statistics.cadu.cadus_read == *options.max_cadus;
         if (inspector) {
             statistics.frames = inspector->statistics();
+            reassembler.finish();
+            statistics.packets = reassembler.statistics();
+            packet_log.close();
+            if (!packet_log) throw std::runtime_error("Failed to close packet log");
             frame_log.close();
             if (!frame_log) throw std::runtime_error("Failed to close VCDU log");
         }
@@ -87,7 +115,7 @@ int run(std::span<const std::string_view> arguments) {
         if (options.dump_stats) {
             metop::write_text_statistics(std::cout, statistics);
         } else {
-            std::cout << (options.no_rs ? "M3 inspection" : "M2 diagnostics")
+            std::cout << (options.no_rs ? "M4 packet reassembly" : "M2 diagnostics")
                       << " (RS not applied): " << statistics.cadu.cadus_read << " CADUs, "
                       << statistics.cadu.resyncs << " resyncs, "
                       << statistics.cadu.skipped_bytes << " skipped bytes, "
@@ -115,6 +143,9 @@ int run(std::span<const std::string_view> arguments) {
                 return 1;
             }
         }
+        if (statistics.packets && (statistics.packets->invalid_headers
+            || statistics.packets->boundary_mismatches || statistics.packets->truncated_packets))
+            std::cerr << "Uncorrected packet anomalies detected; inspect packet statistics.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Error: " << error.what() << '\n';
