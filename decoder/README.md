@@ -1,9 +1,10 @@
-# C++ CADU decoder — Milestone 3
+# C++ CADU decoder — Milestone 4
 
 M1 provides CADU framing inspection; M2 adds the **CCSDS derandomizer and header
 diagnostics**. The decoder validates the `1A CF FC 1D` ASM, recovers byte alignment,
 and XORs all 1020 following bytes. M3 adds **VCDU/M-PDU inspection with explicit
-`--no-rs`**. RS correction, packet reassembly, and images are not yet implemented.
+`--no-rs`**. M4 adds **Space Packet reassembly across VCDUs** in that mode. RS correction
+and images are not yet implemented.
 Output explicitly reports `rs_applied: false`. Without `--no-rs`, the program
 retains M2 diagnostic behaviour and does not invoke the VCDU/M-PDU parsers.
 
@@ -69,7 +70,7 @@ multi-configuration builds normally produce `build/Release/metop_decoder.exe`.
 | `--dump-stats` | Print full statistics for the selected mode instead of the short summary. |
 | `--max-cadus N` | Stop after N accepted CADUs; N must be a positive 64-bit integer. |
 | `--verbose` | Write each accepted CADU's zero-based ordinal and original byte offset to stderr. |
-| `--no-rs` | M3: inspect VCDUs/M-PDUs without RS and write `vcdu_log.csv` in DIR. |
+| `--no-rs` | M4: inspect frames, reconstruct Space Packets without RS, and write `vcdu_log.csv` / `packet_log.csv` in DIR. |
 | `--help` | Show usage without opening input/output files. |
 
 Quote paths containing spaces. Windows uses its native wide command line so
@@ -113,8 +114,8 @@ byte and its original offset, including recovery across circular-buffer wraps.
 
 ## Statistics definitions
 
-The JSON declares `schema_version: 3`, `stage: "derandomization_diagnostics"`
-(default) or `"vcdu_mpdu_no_rs"`, and `rs_applied: false`. CADU counters retain
+The JSON declares `schema_version: 4`, `stage: "derandomization_diagnostics"`
+(default) or `"space_packets_no_rs"`, and `rs_applied: false`. CADU counters retain
 their M1 meanings. Sparse histograms
 `vcids_before`, `vcids_after`, `versions_after`, and `spacecraft_after` contain
 observations from every accepted CADU; no unexpected values are filtered out.
@@ -262,8 +263,8 @@ VCDU or M-PDU header. The parser distinguishes:
 - `0x7FF`: no new packet starts; continuation only.
 - `882..2045`: invalid FHP; report it without cropping or inventing a boundary.
 
-No packet headers are interpreted in M3. In particular, FHP 881 is valid even
-though only one byte of the new packet's header fits; M4 must retain split headers.
+The M3 frame inspector does not interpret packet headers. FHP 881 is valid even
+though only one byte of the new packet's header fits; M4 retains split headers.
 
 Spare bits are preserved and counted separately. The AOS reference convention is
 zero for the five M-PDU spare bits, but the actual capture frequently carries
@@ -303,8 +304,7 @@ and backward/reset events. `frames.vcids` includes only version-1 headers;
 `frames.discontinuities_by_vcid` aggregates counter events across spacecraft and
 replay streams while keeping tracking state separate. Thus it differs from the
 unfiltered M2 diagnostic histogram. Anomalies cause a stderr notice; detailed
-evidence stays in CSV/JSON. Packet-state invalidation belongs to M4, which is not
-implemented yet.
+evidence stays in CSV/JSON. Packet-state invalidation is implemented separately by the M4 reassembler.
 
 ### M3 validation result
 
@@ -338,6 +338,104 @@ carry spacecraft 11, VCID9, counters 14455–14457, and `FFFF` continuation head
 These observations support the parsing offsets but reveal substantial anomalies
 that must remain visible until RS correction and packet reassembly are available.
 
+## M4 Space Packet reassembly
+
+Run with `--no-rs` to enable M4. The default invocation remains M2 diagnostics.
+`space_packet` parses primary headers; `packet_reassembler` owns partial bytes
+and returns complete packets, including their six-byte headers, by value.
+The CLI consumes these packets to write `packet_log.csv`; it does not save
+payload dumps, filter AVHRR APIDs, interpret secondary headers, or assemble
+application-level segments using sequence flags. Those flags are preserved.
+
+### Boundaries and recovery
+
+- State and counters are independent per (spacecraft ID, VCID, replay).
+- Ordinary FHP values delimit the continuation prefix and first new packet.
+  A known partial must finish **exactly** at that boundary. A conflicting length
+  is reported and the partial discarded; parsing resumes at the advertised FHP.
+- FHP 0 starts a new packet immediately. FHP 881 can leave one header byte.
+  Headers split after any of their first five bytes are retained.
+- Following the first packet, lengths delimit every subsequent packet in the
+  zone. All complete packets are delivered; the final incomplete packet is held.
+- `0x7FF` supplies continuation only. Without a partial, its bytes are counted
+  as orphan continuation. Completion before the zone end contradicts this FHP:
+  the partial and remaining bytes are rejected, with a boundary mismatch.
+- `0x7FE` contributes no packet bytes. A contiguous idle zone preserves a partial,
+  including a split header; a counter gap on an idle zone still invalidates it.
+  VCID 63 OID frames do not affect other virtual channels.
+- Counter gaps and backwards/reset observations discard that stream's partial
+  before processing the new FHP. Duplicate counters discard its partial and skip
+  the duplicate frame, preventing repeated delivery. The 24-bit wrap is contiguous.
+- Invalid FHP drops the affected partial. Invalid VCDU version/size or CADU
+  alignment loss clears all partials because stream identity is not reliable.
+  Clearing partials preserves per-stream counter history, so duplicates after
+  recovery are still rejected. Use a new reassembler for an independent capture.
+- Unsupported Space Packet versions stop parsing that zone. No search for a
+  plausible replacement header is attempted. Recovery requires a later FHP.
+- EOF and `--max-cadus` discard/report unfinished headers and packets. Nothing is
+  padded, cropped to a desired length, or emitted as a complete partial.
+
+Packet Data Length is data bytes minus one: total bytes = field + 7. All 16-bit
+values are legal, including zero (7-byte packet) and FFFF (65,542-byte packet).
+There is no invented mission-specific length limit. Storage grows only with
+received bytes, bounded by that protocol maximum per active stream. A length
+that disagrees with a subsequent FHP is impossible for that stream and rejected.
+A plausible but corrupted length cannot always be detected without RS.
+
+These rules follow specification sections 10–12 and
+[CCSDS Space Packet Protocol 133.0-B-2](https://ccsds.org/Pubs/133x0b2e2.pdf),
+section 4.1. In particular,
+[CCSDS AOS 732.0-B-4](https://ccsds.org/Pubs/732x0b4.pdf), section 4.1.4.2.4.4 note 2,
+permits idle M-PDUs in the middle of a split packet; idle must not erase a
+contiguous partial. APID 2047 idle packets are length-delimited and counted
+separately, without delivery to the caller.
+
+### Output and limitations
+
+`packet_log.csv` is replaced each run and has one row per delivered non-idle
+packet. It records packet index, spacecraft ID, VCID, replay, start/end VCDU
+counters, APID, sequence flags/count, secondary-header flag, total size, and
+`rs_status=not_applied`. Input/output collisions are rejected before writing.
+The counters refer to the first header byte and final data byte, respectively.
+
+JSON schema 4 adds `packets` in `--no-rs` mode and uses stage
+`space_packets_no_rs`. Text statistics expose the same counters:
+
+| Counter | Meaning |
+| --- | --- |
+| `reconstructed`, `reconstructed_bytes`, `by_vcid` | Delivered non-idle packets, their byte total, and VCID counts. |
+| `idle_packets`, `idle_zones` | Complete APID 2047 packets and FHP 0x7FE zones. |
+| `invalid_headers` | Unsupported packet versions encountered at known boundaries. |
+| `boundary_mismatches` | Packet lengths inconsistent with continuation/FHP boundaries. |
+| `truncated_packets`, `discarded_partial_bytes` | Observed candidates discarded and buffered bytes discarded, including malformed headers and EOF/limit partials. These are not estimated missing-packet counts. |
+| `orphan_continuation_bytes` | Prefix/continuation bytes with no saved partial. |
+| `rejected_zone_bytes` | Unconsumed bytes after an error, or entire invalid-FHP/duplicate zones. |
+| `invalid_frames`, `duplicate_frames` | Rejected VCDU sizes/versions/FHPs and skipped duplicate counters. |
+
+Exit status retains the inspection contract: zero indicates successful processing
+with at least one structurally valid M-PDU, not successful instrument decoding
+or a guarantee of any reconstructed packets. Anomalies appear in stderr and
+statistics. All packet data remain uncorrected; no checksum, secondary-header
+format, AVHRR layout, or payload validity is claimed.
+
+### M4 validation
+
+Windows Release (GCC 14.2.0 / MinGW-w64, Ninja, CMake 3.31.5) passes **96/96
+CTest cases**. The 35 added cases cover primary-header masks, length extremes,
+three-M-PDU byte-for-byte reconstruction, all header split positions, a mixed
+100-packet stream, multiple packets per zone, idle insertion, independent streams,
+gaps, duplicate/backward counters, rollover, impossible boundaries, invalid
+headers/frames, EOF/limit partials, CLI recovery after gaps/alignment loss, output
+errors, and input preservation. Five regressions cover duplicate rejection after
+invalid VCDU version/size or alignment loss, including CLI CSV/statistics checks
+and recovery at the next valid frame. All five fail before the counter-history
+fix and pass after it.
+
+The three-M-PDU fixture delivers a 2000-byte packet followed by a 646-byte
+packet, exactly 2646 bytes total, without truncations or invalid headers.
+Stopping after two CADUs emits no packet and reports one 1764-byte partial.
+The maximum-length test reconstructs all 65,542 bytes across 75 M-PDUs.
+
 ## Requirements and subsequent work
 
 The current engineering specification is `../CODEX_METOP_CADU_AVHRR_DECODER.md`
@@ -350,6 +448,7 @@ and [CCSDS TM Synchronization and Channel Coding](https://ccsds.org/Pubs/131x0b5
 M3 field geometry follows specification sections 7–10. Version, idle-frame,
 counter, and FHP behaviour also reference
 [CCSDS AOS 732.0-B-4](https://ccsds.org/Pubs/732x0b4.pdf), sections 4.1.2 and 4.1.4.2.
-M4 packet reassembly, M5 RS correction, and M6 AVHRR inspection follow separately.
+M4 packet reassembly implements specification sections 11–12. M5 RS correction
+and M6 AVHRR inspection remain subsequent work.
 AVHRR sample offsets and scan-to-packet mapping must be verified before instrument
 decoding. The eventual raw image width is exactly 2048 Earth-view samples.

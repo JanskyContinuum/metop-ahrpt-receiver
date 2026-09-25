@@ -6,6 +6,16 @@
 
 namespace metop {
 namespace {
+auto packet_counters(const PacketStatistics& p) {
+    return std::array<std::pair<std::string_view, std::uint64_t>, 12>{{
+        {"reconstructed", p.reconstructed}, {"reconstructed_bytes", p.reconstructed_bytes},
+        {"idle_packets", p.idle_packets}, {"invalid_headers", p.invalid_headers},
+        {"boundary_mismatches", p.boundary_mismatches}, {"truncated_packets", p.truncated_packets},
+        {"discarded_partial_bytes", p.discarded_partial_bytes},
+        {"orphan_continuation_bytes", p.orphan_continuation_bytes},
+        {"rejected_zone_bytes", p.rejected_zone_bytes}, {"idle_zones", p.idle_zones},
+        {"invalid_frames", p.invalid_frames}, {"duplicate_frames", p.duplicate_frames}}};
+}
 auto frame_counters(const FrameStatistics& f) {
     return std::array<std::pair<std::string_view, std::uint64_t>, 13>{{
         {"headers", f.headers}, {"invalid_versions", f.invalid_versions},
@@ -38,7 +48,7 @@ void histogram_text(std::ostream& output, const char* label, const std::array<st
 
 void write_text_statistics(std::ostream& output, const RunStatistics& statistics) {
     const auto& c = statistics.cadu;
-    output << "Stage: " << (statistics.frames ? "M3 VCDU/M-PDU inspection" : "M2 derandomization diagnostics")
+    output << "Stage: " << (statistics.frames ? "M4 Space Packet reassembly" : "M2 derandomization diagnostics")
            << " (RS not applied)\n"
            << "Input size: " << statistics.input_size << " bytes\n"
            << "CADUs read: " << c.cadus_read << '\n'
@@ -62,12 +72,18 @@ void write_text_statistics(std::ostream& output, const RunStatistics& statistics
         histogram_text(output, "Version-1 VCIDs", statistics.frames->vcids);
         histogram_text(output, "Counter discontinuities by VCID", statistics.frames->discontinuities_by_vcid);
     }
+    if (statistics.packets) {
+        output << "Space Packets (uncorrected):\n";
+        for (const auto& [name, value] : packet_counters(*statistics.packets))
+            output << "  " << name << ": " << value << '\n';
+        histogram_text(output, "Reconstructed packets by VCID", statistics.packets->by_vcid);
+    }
 }
 
 void write_json_statistics(std::ostream& output, const RunStatistics& statistics) {
     const auto& c = statistics.cadu;
-    output << "{\n  \"schema_version\": 3,\n  \"stage\": \""
-           << (statistics.frames ? "vcdu_mpdu_no_rs" : "derandomization_diagnostics") << "\",\n"
+    output << "{\n  \"schema_version\": 4,\n  \"stage\": \""
+           << (statistics.frames ? "space_packets_no_rs" : "derandomization_diagnostics") << "\",\n"
            << "  \"rs_applied\": false,\n"
            << "  \"input_size\": " << statistics.input_size << ",\n"
            << "  \"stopped_by_limit\": " << (statistics.stopped_by_limit ? "true" : "false") << ",\n"
@@ -97,6 +113,14 @@ void write_json_statistics(std::ostream& output, const RunStatistics& statistics
         histogram_json(output, statistics.frames->vcids);
         output << ",\n    \"discontinuities_by_vcid\": ";
         histogram_json(output, statistics.frames->discontinuities_by_vcid);
+        output << "\n  }";
+    }
+    if (statistics.packets) {
+        output << ",\n  \"packets\": {\n";
+        for (const auto& [name, value] : packet_counters(*statistics.packets))
+            output << "    \"" << name << "\": " << value << ",\n";
+        output << "    \"by_vcid\": ";
+        histogram_json(output, statistics.packets->by_vcid);
         output << "\n  }";
     }
     output << "\n}\n";
