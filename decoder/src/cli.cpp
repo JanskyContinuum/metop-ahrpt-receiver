@@ -8,10 +8,12 @@ namespace metop {
 
 std::string_view usage() {
     return "Usage: metop_decoder <input.cadu> --out <directory> [options]\n"
-           "M5: CCSDS RS(255,223), interleave 4, and Space Packet reassembly.\n"
+           "M6: CCSDS RS, Space Packet reassembly and AVHRR packet inspection.\n"
            "  --no-rs        Bypass RS explicitly; parse uncorrected VCDUs/packets\n"
            "  --max-cadus N  Stop after N accepted CADUs (positive integer)\n"
            "  --dump-stats   Print full statistics; stats.txt/json are always saved\n"
+           "  --dump-debug   Save full AVHRR packets in --out/debug and print previews\n"
+           "  --inspect-packets N  Preview first N selected payloads in CSV (default 20; 0 disables)\n"
            "  --verbose      Log each accepted CADU index and file offset\n"
            "  --help         Show this help\n";
 }
@@ -50,6 +52,17 @@ Options parse_options(std::span<const std::string_view> arguments) {
                 throw std::invalid_argument("--max-cadus requires a positive 64-bit integer");
             }
             options.max_cadus = count;
+        } else if (argument == "--inspect-packets") {
+            duplicate(options.inspect_packets.has_value());
+            const auto text = value();
+            std::uint64_t count = 0;
+            const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), count);
+            if (error != std::errc{} || end != text.data() + text.size())
+                throw std::invalid_argument("--inspect-packets requires a nonnegative 64-bit integer");
+            options.inspect_packets = count;
+        } else if (argument == "--dump-debug") {
+            duplicate(options.dump_debug);
+            options.dump_debug = true;
         } else if (argument == "--no-rs") {
             duplicate(options.no_rs);
             options.no_rs = true;

@@ -5,6 +5,7 @@
 #include "frame_inspector.h"
 #include "packet_reassembler.h"
 #include "reed_solomon.h"
+#include "avhrr.h"
 
 #include <filesystem>
 #include <fstream>
@@ -47,7 +48,28 @@ int run(std::span<const std::string_view> arguments) {
                 throw std::runtime_error("Statistics output would overwrite the input file");
             }
         }
-        std::filesystem::create_directories(options.output);
+        // Check every additional output BEFORE opening/truncating any output file.
+        for (const auto* name : {"packet_log.csv", "apid_103_packets.bin", "apid_104_packets.bin"}) {
+            if (!options.dump_debug && std::string_view(name) != "packet_log.csv") continue;
+            const auto destination = options.output / "debug" / name;
+            if (std::filesystem::exists(destination) && std::filesystem::equivalent(options.input, destination))
+                throw std::runtime_error("AVHRR debug output would overwrite the input file");
+        }
+        std::filesystem::create_directories(options.output / "debug");
+        std::ofstream avhrr_log(options.output / "debug" / "packet_log.csv", std::ios::binary | std::ios::trunc);
+        if (!avhrr_log) throw std::runtime_error("Cannot open AVHRR packet log");
+        std::array<std::ofstream, 2> avhrr_dumps;
+        std::array<std::ostream*, 2> dump_streams{};
+        if (options.dump_debug) {
+            for (std::size_t i = 0; i < avhrr_dumps.size(); ++i) {
+                avhrr_dumps[i].open(options.output / "debug" / ("apid_" + std::to_string(103 + i) + "_packets.bin"),
+                                    std::ios::binary | std::ios::trunc);
+                if (!avhrr_dumps[i]) throw std::runtime_error("Cannot open AVHRR binary packet dump");
+                dump_streams[i] = &avhrr_dumps[i];
+            }
+        }
+        metop::AvhrrInspector avhrr(avhrr_log, !options.no_rs, options.inspect_packets.value_or(20),
+                                    dump_streams, options.dump_debug ? &std::cout : nullptr);
         metop::RunStatistics statistics;
         statistics.input_size = std::filesystem::file_size(options.input);
         std::ofstream frame_log;
@@ -115,6 +137,7 @@ int run(std::span<const std::string_view> arguments) {
                 inspector->inspect(cadu->index, cadu->file_offset, vcdu, rs_status);
                 for (const auto& packet : reassembler.consume(vcdu)) {
                     const auto& h = packet.header;
+                    avhrr.consume(packet, packet_index);
                     packet_log << packet_index++ << ',' << unsigned(packet.source.spacecraft_id)
                         << ',' << unsigned(packet.source.vcid) << ',' << packet.source.replay
                         << ',' << packet.source.counter << ',' << packet.end_counter
@@ -139,11 +162,20 @@ int run(std::span<const std::string_view> arguments) {
         }
         rs_log.close();
         if (!rs_log) throw std::runtime_error("Failed to close RS log");
+        statistics.avhrr = avhrr.statistics();
+        avhrr_log.close();
+        if (!avhrr_log) throw std::runtime_error("Failed to close AVHRR packet log");
+        if (options.dump_debug) {
+            for (auto& dump : avhrr_dumps) {
+                dump.close();
+                if (!dump) throw std::runtime_error("Failed to close AVHRR binary packet dump");
+            }
+        }
         metop::save_statistics(options.output, statistics);
         if (options.dump_stats) {
             metop::write_text_statistics(std::cout, statistics);
         } else {
-            std::cout << (options.no_rs ? "M4 packet reassembly (RS not applied)" : "M5 CCSDS RS packet reassembly")
+            std::cout << (options.no_rs ? "M6 AVHRR packet inspection (RS not applied)" : "M6 AVHRR packet inspection (RS checked)")
                       << ": " << statistics.cadu.cadus_read << " CADUs, "
                       << statistics.cadu.resyncs << " resyncs, "
                       << statistics.cadu.skipped_bytes << " skipped bytes, "

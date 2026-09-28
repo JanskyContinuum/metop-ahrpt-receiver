@@ -1,4 +1,4 @@
-# C++ CADU decoder — Milestone 5
+# C++ CADU decoder — Milestone 6
 
 M1 provides CADU framing inspection; M2 adds the **CCSDS derandomizer and header
 diagnostics**. The decoder validates the `1A CF FC 1D` ASM, recovers byte alignment,
@@ -6,7 +6,9 @@ and XORs all 1020 following bytes. M3 adds VCDU/M-PDU inspection; M4 adds
 Space Packet reassembly across VCDUs. **M5 applies CCSDS RS(255,223), interleave 4,
 with dual-basis conversion before parsing packets by default.** Uncorrectable
 frames are reported and rejected. `--no-rs` retains the uncorrected comparison
-path. AVHRR payload decoding and images are not implemented.
+path. M6 inspects VCID 9 / APID 103–104 packets, reports lengths and header
+fields, and can dump complete packets. AVHRR payload decoding and images
+are not implemented.
 
 MATLAB/Simulink performs the existing physical-layer processing, including QPSK
 demodulation, Viterbi decoding, and CADU alignment. Its binary output is the input
@@ -71,6 +73,8 @@ multi-configuration builds normally produce `build/Release/metop_decoder.exe`.
 | `--max-cadus N` | Stop after N accepted CADUs; N must be a positive 64-bit integer. |
 | `--verbose` | Write each accepted CADU's zero-based ordinal and original byte offset to stderr. |
 | `--no-rs` | Bypass RS and parse uncorrected VCDUs/packets. All logs explicitly label RS as `not_applied`. |
+| `--dump-debug` | Write complete selected packets to `DIR/debug/apid_103_packets.bin` and `apid_104_packets.bin`; print the selected payload previews. |
+| `--inspect-packets N` | Include first 64 / last 16 payload bytes for the first N selected packets across both APIDs in `DIR/debug/packet_log.csv`. Default 20; zero disables previews, not counts or dumps. |
 | `--help` | Show usage without opening input/output files. |
 
 Quote paths containing spaces. Windows uses its native wide command line so
@@ -114,14 +118,14 @@ byte and its original offset, including recovery across circular-buffer wraps.
 
 ## Statistics definitions
 
-The JSON declares `schema_version: 5`, `stage: "space_packets_rs"` and
+The JSON declares `schema_version: 6`, `stage: "space_packets_rs"` and
 `rs_applied: true` by default; `--no-rs` uses `"space_packets_no_rs"` and false.
 CADU counters retain their M1 meanings. Sparse histograms
 `vcids_before`, `vcids_after`, `versions_after`, and `spacecraft_after` contain
 observations from every accepted CADU; no unexpected values are filtered out.
-They are diagnostic bit extractions, not RS-validated headers. APID and image
-statistics remain absent. `frames` and `packets` are present in both modes;
-`rs` is present only when correction is enabled (see M5 below).
+They are diagnostic bit extractions, not RS-validated headers. `frames`,
+`packets` and `avhrr` are present in both modes; `rs` is present only when
+correction is enabled. Image/scan statistics remain absent.
 
 | Field | Meaning |
 | --- | --- |
@@ -344,9 +348,10 @@ that must remain visible until RS correction and packet reassembly are available
 M4 reassembly runs after RS by default; `--no-rs` retains the M4 bypass path.
 `space_packet` parses primary headers; `packet_reassembler` owns partial bytes
 and returns complete packets, including their six-byte headers, by value.
-The CLI consumes these packets to write `packet_log.csv`; it does not save
-payload dumps, filter AVHRR APIDs, interpret secondary headers, or assemble
-application-level segments using sequence flags. Those flags are preserved.
+The CLI consumes these packets to write `packet_log.csv`. M6 additionally
+inspects selected AVHRR packets as described below. It does not interpret
+secondary headers or assemble application-level segments using sequence
+flags. Those flags are preserved.
 
 ### Boundaries and recovery
 
@@ -546,6 +551,61 @@ frames and conservatively clears fragments. The RS run reported 465 discarded
 partial candidates; losses remain visible. These observations support the
 selected field/basis/interleave conventions but do not validate AVHRR payloads.
 
+
+## M6 AVHRR packet inspection
+
+`avhrr` consumes complete reconstructed Space Packets, selects **VCID 9 AND
+APID 103 or 104**, and revalidates primary headers and exact lengths before
+writing outputs. Both APIDs are retained. No expected instrument packet size
+is hard-coded: all valid CCSDS lengths remain visible.
+
+```powershell
+.\build\metop_decoder.exe metop_output.cadu --out decoded --dump-debug --inspect-packets 20 --dump-stats
+```
+
+Every run writes `--out/debug/packet_log.csv`, separate from the existing
+all-APID `--out/packet_log.csv`. The debug CSV contains one row per selected
+packet, with global/selected packet indices, spacecraft/VCID/replay, start/end
+VCDU counters, APID, type, sequence flags/count, secondary-header flag, raw
+Packet Data Length, data-field size, total size, RS status, optional binary
+offset, preview flag and two hexadecimal preview fields.
+
+Here **payload** means exactly the CCSDS Packet Data Field, starting at byte 6
+of the full packet. It includes the secondary header when present. The first
+64 and last 16 bytes are limited to available data for short packets; overlap
+is allowed and nothing is padded. Previews stop after the first N selected
+packets across both APIDs. All selected packets still contribute to metadata,
+statistics and optional dumps. `--dump-debug` also prints these previews.
+
+With `--dump-debug`, the two binary files contain concatenated **complete
+Space Packets including their six-byte primary headers**, without extra
+record markers or length prefixes. Recover each record's length as the
+big-endian primary-header bytes 4–5 plus 7. CSV `binary_offset` is a zero-based
+byte offset into that APID's dump, not into the input CADU file. Empty APIDs
+produce empty files. Without this option, offsets are empty and binary files
+are not written or removed; use a fresh directory to avoid stale dumps.
+
+JSON schema 6 adds `avhrr.selected_packets`, `previewed_packets` and entries
+`apids.103` / `apids.104`. Each has packet/byte totals, a total-size histogram,
+sequence-count frequencies, and arrays for sequence flags (indices 0..3),
+secondary-header flags (0..1), and packet types (0..1). Counts aggregate
+identities per APID; the CSV retains source identity and arrival order. No
+cross-stream sequence continuity or missing-scan count is inferred.
+The existing `stage` values still distinguish RS and bypass processing;
+`rs_status=not_applied` labels every bypass observation.
+
+Windows Release tests pass **134/134 cases**, including 18 M6 cases for
+filtering, both APIDs, header flags, length extremes, malformed inputs,
+bounded previews, exact full-packet dumps, optional-output behaviour, RS
+rejection, CLI limits and output/input collision protection. No real capture
+or instrument layout is required by CTest.
+
+The local capture yields **9 APID-103 packets, 0 APID-104**, each 12966 bytes
+including the primary header, with flags 3 and secondary-header flag 1.
+See [M6 capture observations and reference comparison](docs/avhrr-packet-inspection.md)
+for sequence counters, sample hex, loss context and the exact questions that
+must be resolved before any AVHRR sample decoding.
+
 ## Requirements and subsequent work
 
 The current engineering specification is `../CODEX_METOP_CADU_AVHRR_DECODER.md`
@@ -559,6 +619,7 @@ M3 field geometry follows specification sections 7–10. Version, idle-frame,
 counter, and FHP behaviour also reference
 [CCSDS AOS 732.0-B-4](https://ccsds.org/Pubs/732x0b4.pdf), sections 4.1.2 and 4.1.4.2.
 M4 packet reassembly implements specification sections 11–12. M5 implements
-CCSDS RS correction. M6 AVHRR packet inspection remains subsequent work.
+CCSDS RS correction. M6 adds AVHRR packet inspection; M7 payload-layout
+verification remains subsequent work.
 AVHRR sample offsets and scan-to-packet mapping must be verified before instrument
 decoding. The eventual raw image width is exactly 2048 Earth-view samples.
