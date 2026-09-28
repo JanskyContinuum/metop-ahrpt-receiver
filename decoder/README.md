@@ -1,4 +1,4 @@
-# C++ CADU decoder — Milestone 6
+# C++ CADU decoder — Milestones 7 and 8
 
 M1 provides CADU framing inspection; M2 adds the **CCSDS derandomizer and header
 diagnostics**. The decoder validates the `1A CF FC 1D` ASM, recovers byte alignment,
@@ -7,8 +7,9 @@ Space Packet reassembly across VCDUs. **M5 applies CCSDS RS(255,223), interleave
 with dual-basis conversion before parsing packets by default.** Uncorrectable
 frames are reported and rejected. `--no-rs` retains the uncorrected comparison
 path. M6 inspects VCID 9 / APID 103–104 packets, reports lengths and header
-fields, and can dump complete packets. AVHRR payload decoding and images
-are not implemented.
+fields, and can dump complete packets. M7 documents the verified AVHRR HR layout;
+M8 validates VPC and reconstructs raw ten-bit scans with 2048 Earth samples per
+active channel. Image rendering is not implemented.
 
 MATLAB/Simulink performs the existing physical-layer processing, including QPSK
 demodulation, Viterbi decoding, and CADU alignment. Its binary output is the input
@@ -118,14 +119,15 @@ byte and its original offset, including recovery across circular-buffer wraps.
 
 ## Statistics definitions
 
-The JSON declares `schema_version: 6`, `stage: "space_packets_rs"` and
+The JSON declares `schema_version: 8`, `stage: "space_packets_rs"` and
 `rs_applied: true` by default; `--no-rs` uses `"space_packets_no_rs"` and false.
 CADU counters retain their M1 meanings. Sparse histograms
 `vcids_before`, `vcids_after`, `versions_after`, and `spacecraft_after` contain
 observations from every accepted CADU; no unexpected values are filtered out.
 They are diagnostic bit extractions, not RS-validated headers. `frames`,
 `packets` and `avhrr` are present in both modes; `rs` is present only when
-correction is enabled. Image/scan statistics remain absent.
+correction is enabled. `avhrr_scans` reports payload acceptance/rejection and
+channel-3 mode counts; image statistics remain absent.
 
 | Field | Meaning |
 | --- | --- |
@@ -594,7 +596,7 @@ cross-stream sequence continuity or missing-scan count is inferred.
 The existing `stage` values still distinguish RS and bypass processing;
 `rs_status=not_applied` labels every bypass observation.
 
-Windows Release tests pass **134/134 cases**, including 18 M6 cases for
+The M6 baseline had **134 tests**, including 18 M6 cases for
 filtering, both APIDs, header flags, length extremes, malformed inputs,
 bounded previews, exact full-packet dumps, optional-output behaviour, RS
 rejection, CLI limits and output/input collision protection. No real capture
@@ -604,7 +606,47 @@ The local capture yields **9 APID-103 packets, 0 APID-104**, each 12966 bytes
 including the primary header, with flags 3 and secondary-header flag 1.
 See [M6 capture observations and reference comparison](docs/avhrr-packet-inspection.md)
 for sequence counters, sample hex, loss context and the exact questions that
-must be resolved before any AVHRR sample decoding.
+were open at M6. The M7/M8 layout document below records their resolution and
+remaining calibration limitations.
+
+## M7/M8 raw AVHRR scans
+
+[Verified payload layout and source evidence](docs/avhrr-payload-layout.md)
+documents the primary ICD revision, derived byte/bit offsets and pinned
+behavioural cross-check. The pipeline now decodes each complete VCID-9 /
+APID-103/104 packet into five channels of unscaled `uint16_t` counts (0..1023).
+APID 103 selects 3A; 104 selects 3B. The other channel-3 mode is absent.
+
+No new CLI flag is needed. Every run writes `DIR/avhrr_scan_log.csv`, with source
+identity, start/end VCDU counters, packet sequence, RS provenance, rejection
+reason or accepted mode/time fields, and Earth width. JSON schema 8 adds
+`avhrr_scans`: candidates, accepted, rejected, channel_3a, channel_3b,
+earth_samples_per_channel and error counters. Existing stage names still identify
+the RS path. Each rejected candidate has one reason; earlier checks take precedence.
+
+The library entry point `decode_avhrr_packet` returns an `AvhrrScan` or a
+rejection. `AvhrrScanProcessor` streams scans through an optional callback.
+Earth, space and back-scan arrays remain separate; ramp and temperature words
+are preserved in wire order. The CLI currently exports scan metadata only;
+raw sample arrays are available through the library for M9. No images,
+calibrated radiances, missing-row fillers or inactive-channel arrays are produced.
+
+The exact 12966-byte profile, header fields, VPC, time ranges, SBT reserved byte
+and two filler bits are checked. Invalid packets stay visible in the M6 logs
+and optional packet dumps. `--no-rs` still checks VPC and records the bypass.
+Recoverable payload errors do not change the existing CLI exit-code contract.
+
+The complete local Release suite passes **148/148 tests**. New coverage includes
+all ten-bit values at multiple bit alignments, a literal packed vector,
+overflow/bounds checks, all truncation lengths, both channel-3 modes,
+every Earth sample and field boundary, VPC and metadata rejection,
+multi-VCDU scans, callback routing, EOF partials and output failure/collision checks.
+Tests require no capture or downloaded documents.
+
+On the local capture: RS enabled yields **9 accepted 3A scans, 0 rejected
+payloads**. Each has five times 2048 raw Earth samples. RS bypass yields
+13 candidates, all rejected by VPC. No real APID-104 packet is available;
+3B is covered synthetically.
 
 ## Requirements and subsequent work
 
@@ -619,7 +661,6 @@ M3 field geometry follows specification sections 7–10. Version, idle-frame,
 counter, and FHP behaviour also reference
 [CCSDS AOS 732.0-B-4](https://ccsds.org/Pubs/732x0b4.pdf), sections 4.1.2 and 4.1.4.2.
 M4 packet reassembly implements specification sections 11–12. M5 implements
-CCSDS RS correction. M6 adds AVHRR packet inspection; M7 payload-layout
-verification remains subsequent work.
-AVHRR sample offsets and scan-to-packet mapping must be verified before instrument
-decoding. The eventual raw image width is exactly 2048 Earth-view samples.
+CCSDS RS correction. M6 adds AVHRR packet inspection; M7 verifies and documents
+the payload profile; M8 reconstructs raw scans. M9 image output and M10 previews
+remain subsequent work. The raw scan width is exactly 2048 Earth-view samples.
