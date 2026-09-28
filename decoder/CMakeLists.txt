@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(metop_core src/cadu_reader.cpp src/cli.cpp src/statistics.cpp
     src/ccsds_randomizer.cpp src/vcdu.cpp src/mpdu.cpp src/frame_inspector.cpp
-    src/space_packet.cpp src/packet_reassembler.cpp src/reed_solomon.cpp)
+    src/space_packet.cpp src/packet_reassembler.cpp src/reed_solomon.cpp src/avhrr.cpp)
 target_include_directories(metop_core PUBLIC src)
 add_executable(metop_decoder src/main.cpp)
 target_link_libraries(metop_decoder PRIVATE metop_core)
@@ -28,6 +28,20 @@ metop_warnings(metop_decoder)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(avhrr_tests tests/avhrr_tests.cpp)
+    target_link_libraries(avhrr_tests PRIVATE metop_core)
+    metop_warnings(avhrr_tests)
+    foreach(case IN ITEMS filter preview lengths headers malformed no_dumps write_errors options)
+        add_test(NAME avhrr.${case} COMMAND avhrr_tests ${case})
+    endforeach()
+    foreach(case IN ITEMS default complete limit zero no_rs rejected collision_csv collision_103 collision_104 output_failure)
+        add_test(NAME avhrr_cli.${case} COMMAND ${CMAKE_COMMAND}
+            "-DDECODER=$<TARGET_FILE:metop_decoder>"
+            "-DFIXTURE=$<TARGET_FILE:rs_tests>"
+            "-DREFERENCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/reference/cvcdus.hex"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/avhrr-cli-tests/${case}"
+            "-DCASE=${case}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/avhrr_cli.cmake")
+    endforeach()
     add_executable(rs_tests tests/rs_tests.cpp)
     target_link_libraries(rs_tests PRIVATE metop_core)
     target_compile_definitions(rs_tests PRIVATE RS_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/reference")

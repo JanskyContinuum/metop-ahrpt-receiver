@@ -12,6 +12,8 @@ struct Options {
     std::filesystem::path input;
     std::filesystem::path output;
     std::optional<std::uint64_t> max_cadus;
+    std::optional<std::uint64_t> inspect_packets; // Default 20; zero disables payload previews.
+    bool dump_debug = false;
     bool dump_stats = false;
     bool verbose = false;
     bool no_rs = false;

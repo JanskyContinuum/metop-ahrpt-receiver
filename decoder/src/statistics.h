@@ -4,6 +4,7 @@
 #include "frame_inspector.h"
 #include "packet_reassembler.h"
 #include "reed_solomon.h"
+#include "avhrr.h"
 
 #include <filesystem>
 #include <iosfwd>
@@ -21,6 +22,7 @@ struct RunStatistics {
     std::optional<RsStatistics> rs;
     std::optional<FrameStatistics> frames;
     std::optional<PacketStatistics> packets;
+    AvhrrStatistics avhrr;
     bool stopped_by_limit = false;
 };
 
