@@ -4,6 +4,7 @@
 #include "statistics.h"
 #include "frame_inspector.h"
 #include "packet_reassembler.h"
+#include "reed_solomon.h"
 
 #include <filesystem>
 #include <fstream>
@@ -39,9 +40,7 @@ int run(std::span<const std::string_view> arguments) {
             throw std::runtime_error("Cannot open input file");
         }
         // Prevent a user-selected input (including a hard link) being overwritten by stats.
-        for (const auto* name : {"stats.txt", "stats.json", "vcdu_log.csv", "packet_log.csv"}) {
-            if (!options.no_rs && (std::string_view(name) == "vcdu_log.csv"
-                || std::string_view(name) == "packet_log.csv")) continue;
+        for (const auto* name : {"stats.txt", "stats.json", "vcdu_log.csv", "packet_log.csv", "rs_log.csv"}) {
             const auto destination = options.output / name;
             if (std::filesystem::exists(destination)
                 && std::filesystem::equivalent(options.input, destination)) {
@@ -53,11 +52,15 @@ int run(std::span<const std::string_view> arguments) {
         statistics.input_size = std::filesystem::file_size(options.input);
         std::ofstream frame_log;
         std::ofstream packet_log;
+        std::ofstream rs_log(options.output / "rs_log.csv", std::ios::binary | std::ios::trunc);
+        if (!rs_log) throw std::runtime_error("Cannot open RS log");
+        rs_log << "cadu_index,file_offset,rs_status,lane_0,lane_1,lane_2,lane_3\n";
+        if (!options.no_rs) statistics.rs.emplace();
         metop::PacketReassembler reassembler;
         std::uint64_t packet_index = 0;
         std::uint64_t previous_asm_failures = 0;
         std::optional<metop::FrameInspector> inspector;
-        if (options.no_rs) {
+        {
             frame_log.open(options.output / "vcdu_log.csv", std::ios::binary | std::ios::trunc);
             if (!frame_log) throw std::runtime_error("Cannot open VCDU log");
             inspector.emplace(frame_log);
@@ -65,7 +68,8 @@ int run(std::span<const std::string_view> arguments) {
             if (!packet_log) throw std::runtime_error("Cannot open packet log");
             packet_log << "packet_index,spacecraft_id,vcid,replay,start_counter,end_counter,"
                           "apid,seq_flags,seq_count,secondary_header,total_size,rs_status\n";
-            std::cerr << "--no-rs: packet reassembly uses uncorrected data; parity is ignored.\n";
+            if (options.no_rs)
+                std::cerr << "--no-rs: packet reassembly uses uncorrected data; parity is ignored.\n";
         }
         metop::CaduReader reader(input);
         while (!options.max_cadus || reader.statistics().cadus_read < *options.max_cadus) {
@@ -79,24 +83,46 @@ int run(std::span<const std::string_view> arguments) {
             ++statistics.versions_after[cadu->bytes[4] >> 6];
             const auto spacecraft = ((cadu->bytes[4] & 0x3f) << 2) | (cadu->bytes[5] >> 6);
             ++statistics.spacecraft_after[static_cast<std::size_t>(spacecraft)];
+            if (options.verbose)
+                std::cerr << "CADU " << cadu->index << " offset " << cadu->file_offset << '\n';
+            if (reader.statistics().asm_failures != previous_asm_failures)
+                reassembler.invalidate_all();
+            previous_asm_failures = reader.statistics().asm_failures;
             if (inspector) {
-                const auto vcdu = std::span(cadu->bytes).subspan<4, metop::vcdu_size>();
-                inspector->inspect(cadu->index, cadu->file_offset, vcdu);
-                if (reader.statistics().asm_failures != previous_asm_failures)
-                    reassembler.invalidate_all();
-                previous_asm_failures = reader.statistics().asm_failures;
+                auto vcdu = std::span<const std::uint8_t>(cadu->bytes).subspan<4, metop::vcdu_size>();
+                std::optional<metop::RsFrameResult> rs_result;
+                std::string_view rs_status = "not_applied";
+                rs_log << cadu->index << ',' << cadu->file_offset << ',';
+                if (!options.no_rs) {
+                    rs_result = metop::decode_rs_frame(std::span(cadu->bytes).subspan<4, metop::cvcdu_size>());
+                    statistics.rs->observe(*rs_result);
+                    rs_status = metop::rs_status_name(rs_result->status);
+                    rs_log << rs_status;
+                    for (const auto count : rs_result->corrected_symbols) rs_log << ',' << count;
+                    rs_log << '\n';
+                    if (!rs_log) throw std::runtime_error("Failed to write RS log");
+                    if (!rs_result->vcdu) {
+                        // Even the stream identity may be corrupt: clear every partial,
+                        // preserving counter history for duplicate detection after recovery.
+                        reassembler.invalidate_all();
+                        continue;
+                    }
+                    vcdu = *rs_result->vcdu;
+                } else {
+                    rs_log << "not_applied,,,,\n";
+                    if (!rs_log) throw std::runtime_error("Failed to write RS log");
+                }
+                inspector->inspect(cadu->index, cadu->file_offset, vcdu, rs_status);
                 for (const auto& packet : reassembler.consume(vcdu)) {
                     const auto& h = packet.header;
                     packet_log << packet_index++ << ',' << unsigned(packet.source.spacecraft_id)
                         << ',' << unsigned(packet.source.vcid) << ',' << packet.source.replay
                         << ',' << packet.source.counter << ',' << packet.end_counter
                         << ',' << h.apid << ',' << unsigned(h.sequence_flags) << ',' << h.sequence_count
-                        << ',' << h.secondary_header_flag << ',' << packet.bytes.size() << ",not_applied\n";
+                        << ',' << h.secondary_header_flag << ',' << packet.bytes.size() << ','
+                        << (options.no_rs ? "not_applied" : "rs_checked") << '\n';
                 }
                 if (!packet_log) throw std::runtime_error("Failed to write packet log");
-            }
-            if (options.verbose) {
-                std::cerr << "CADU " << cadu->index << " offset " << cadu->file_offset << '\n';
             }
         }
         statistics.cadu = reader.statistics();
@@ -111,12 +137,14 @@ int run(std::span<const std::string_view> arguments) {
             frame_log.close();
             if (!frame_log) throw std::runtime_error("Failed to close VCDU log");
         }
+        rs_log.close();
+        if (!rs_log) throw std::runtime_error("Failed to close RS log");
         metop::save_statistics(options.output, statistics);
         if (options.dump_stats) {
             metop::write_text_statistics(std::cout, statistics);
         } else {
-            std::cout << (options.no_rs ? "M4 packet reassembly" : "M2 diagnostics")
-                      << " (RS not applied): " << statistics.cadu.cadus_read << " CADUs, "
+            std::cout << (options.no_rs ? "M4 packet reassembly (RS not applied)" : "M5 CCSDS RS packet reassembly")
+                      << ": " << statistics.cadu.cadus_read << " CADUs, "
                       << statistics.cadu.resyncs << " resyncs, "
                       << statistics.cadu.skipped_bytes << " skipped bytes, "
                       << statistics.cadu.trailing_bytes << " trailing bytes"
@@ -132,20 +160,22 @@ int run(std::span<const std::string_view> arguments) {
             std::cerr << "No complete validated CADUs found.\n";
             return 1;
         }
+        if (statistics.rs && statistics.rs->uncorrectable_frames)
+            std::cerr << "Uncorrectable RS frames rejected; inspect rs_log.csv and statistics.\n";
         if (statistics.frames) {
             const auto& frames = *statistics.frames;
             if (frames.invalid_versions || frames.invalid_fhp || frames.nonzero_mpdu_spare
                 || frames.nonzero_signaling_spare || frames.counter_gaps || frames.counter_duplicates
                 || frames.counter_backward_or_reset)
-                std::cerr << "Uncorrected frame anomalies detected; inspect vcdu_log.csv and statistics.\n";
+                std::cerr << "Frame anomalies detected; inspect vcdu_log.csv and statistics.\n";
             if (!frames.valid_mpdus) {
-                std::cerr << "No structurally valid M-PDUs found in --no-rs mode.\n";
+                std::cerr << "No structurally valid M-PDUs found.\n";
                 return 1;
             }
         }
         if (statistics.packets && (statistics.packets->invalid_headers
             || statistics.packets->boundary_mismatches || statistics.packets->truncated_packets))
-            std::cerr << "Uncorrected packet anomalies detected; inspect packet statistics.\n";
+            std::cerr << "Packet anomalies detected; inspect packet statistics.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Error: " << error.what() << '\n';

@@ -13,11 +13,11 @@ FrameInspector::FrameInspector(std::ostream& log) : log_(log) {
 }
 
 void FrameInspector::inspect(std::uint64_t index, std::uint64_t offset,
-                             std::span<const std::uint8_t> bytes) {
+                             std::span<const std::uint8_t> bytes, std::string_view rs_status) {
     const auto vcdu = parse_vcdu(bytes);
     const auto& h = vcdu.header;
     ++statistics_.headers;
-    log_ << index << ',' << offset << ",not_applied," << unsigned(h.version) << ','
+    log_ << index << ',' << offset << ',' << rs_status << ',' << unsigned(h.version) << ','
          << unsigned(h.spacecraft_id) << ',' << unsigned(h.vcid) << ',' << h.counter << ','
          << h.replay << ',' << unsigned(h.signaling_spare) << ','
          << unsigned(vcdu.insert_zone[0]) << ',' << unsigned(vcdu.insert_zone[1]) << ',';
@@ -52,7 +52,7 @@ void FrameInspector::inspect(std::uint64_t index, std::uint64_t offset,
             const bool valid = mpdu.kind != FirstHeaderKind::invalid;
             if (valid) ++statistics_.valid_mpdus;
             log_ << mpdu.first_header_pointer << ',' << unsigned(mpdu.reserved_spare) << ','
-                 << first_header_kind_name(mpdu.kind) << ',' << (valid ? "uncorrected" : "invalid_mpdu") << '\n';
+                 << first_header_kind_name(mpdu.kind) << ',' << (valid ? (rs_status == "not_applied" ? "uncorrected" : "valid") : "invalid_mpdu") << '\n';
         }
     }
     if (!log_) throw std::runtime_error("Failed to write VCDU log");

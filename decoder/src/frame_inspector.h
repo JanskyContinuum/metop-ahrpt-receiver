@@ -3,6 +3,7 @@
 #include "vcdu.h"
 
 #include <iosfwd>
+#include <string_view>
 
 namespace metop {
 
@@ -24,12 +25,13 @@ struct FrameStatistics {
     std::array<std::uint64_t, 64> discontinuities_by_vcid{};
 };
 
-// M3 inspection only. Does not reconstruct packets or validate RS parity.
+// Inspects supplied VCDU bytes; caller performs RS and supplies its status.
+// Does not reconstruct packets or independently validate RS parity.
 class FrameInspector {
 public:
     explicit FrameInspector(std::ostream& log);
     void inspect(std::uint64_t cadu_index, std::uint64_t file_offset,
-                 std::span<const std::uint8_t> vcdu);
+                 std::span<const std::uint8_t> vcdu, std::string_view rs_status = "not_applied");
     const FrameStatistics& statistics() const noexcept { return statistics_; }
 private:
     std::ostream& log_;
