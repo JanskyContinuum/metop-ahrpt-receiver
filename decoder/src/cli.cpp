@@ -8,8 +8,8 @@ namespace metop {
 
 std::string_view usage() {
     return "Usage: metop_decoder <input.cadu> --out <directory> [options]\n"
-           "M2: CADU derandomization and header diagnostics; RS not applied.\n"
-           "  --no-rs        Enable M4 packet reassembly, bypassing RS explicitly\n"
+           "M5: CCSDS RS(255,223), interleave 4, and Space Packet reassembly.\n"
+           "  --no-rs        Bypass RS explicitly; parse uncorrected VCDUs/packets\n"
            "  --max-cadus N  Stop after N accepted CADUs (positive integer)\n"
            "  --dump-stats   Print full statistics; stats.txt/json are always saved\n"
            "  --verbose      Log each accepted CADU index and file offset\n"

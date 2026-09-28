@@ -48,8 +48,8 @@ void histogram_text(std::ostream& output, const char* label, const std::array<st
 
 void write_text_statistics(std::ostream& output, const RunStatistics& statistics) {
     const auto& c = statistics.cadu;
-    output << "Stage: " << (statistics.frames ? "M4 Space Packet reassembly" : "M2 derandomization diagnostics")
-           << " (RS not applied)\n"
+    output << "Stage: " << (statistics.rs ? "M5 CCSDS RS Space Packet reassembly" : "M4 Space Packet reassembly (RS not applied)")
+           << '\n'
            << "Input size: " << statistics.input_size << " bytes\n"
            << "CADUs read: " << c.cadus_read << '\n'
            << "Valid ASM: " << c.valid_asm << '\n'
@@ -66,14 +66,24 @@ void write_text_statistics(std::ostream& output, const RunStatistics& statistics
     histogram_text(output, "VCID after XOR (uncorrected)", statistics.vcids_after);
     histogram_text(output, "Version after XOR (uncorrected)", statistics.versions_after);
     histogram_text(output, "Spacecraft ID after XOR (uncorrected)", statistics.spacecraft_after);
+    if (statistics.rs) {
+        const auto& rs = *statistics.rs;
+        output << "CCSDS RS(255,223), interleave 4:\n"
+               << "  good_frames: " << rs.good_frames << '\n'
+               << "  corrected_frames: " << rs.corrected_frames << '\n'
+               << "  uncorrectable_frames: " << rs.uncorrectable_frames << '\n';
+        for (std::size_t lane = 0; lane < rs_interleave; ++lane)
+            output << "  lane_" << lane << "_corrected_symbols: " << rs.corrected_symbols[lane]
+                   << ", uncorrectable: " << rs.uncorrectable_lanes[lane] << '\n';
+    }
     if (statistics.frames) {
-        output << "VCDU/M-PDU (uncorrected):\n";
+        output << (statistics.rs ? "VCDU/M-PDU (RS checked):\n" : "VCDU/M-PDU (uncorrected):\n");
         for (const auto& [name, value] : frame_counters(*statistics.frames)) output << "  " << name << ": " << value << '\n';
         histogram_text(output, "Version-1 VCIDs", statistics.frames->vcids);
         histogram_text(output, "Counter discontinuities by VCID", statistics.frames->discontinuities_by_vcid);
     }
     if (statistics.packets) {
-        output << "Space Packets (uncorrected):\n";
+        output << (statistics.rs ? "Space Packets (RS checked):\n" : "Space Packets (uncorrected):\n");
         for (const auto& [name, value] : packet_counters(*statistics.packets))
             output << "  " << name << ": " << value << '\n';
         histogram_text(output, "Reconstructed packets by VCID", statistics.packets->by_vcid);
@@ -82,9 +92,9 @@ void write_text_statistics(std::ostream& output, const RunStatistics& statistics
 
 void write_json_statistics(std::ostream& output, const RunStatistics& statistics) {
     const auto& c = statistics.cadu;
-    output << "{\n  \"schema_version\": 4,\n  \"stage\": \""
-           << (statistics.frames ? "space_packets_no_rs" : "derandomization_diagnostics") << "\",\n"
-           << "  \"rs_applied\": false,\n"
+    output << "{\n  \"schema_version\": 5,\n  \"stage\": \""
+           << (statistics.rs ? "space_packets_rs" : "space_packets_no_rs") << "\",\n"
+           << "  \"rs_applied\": " << (statistics.rs ? "true" : "false") << ",\n"
            << "  \"input_size\": " << statistics.input_size << ",\n"
            << "  \"stopped_by_limit\": " << (statistics.stopped_by_limit ? "true" : "false") << ",\n"
            << "  \"cadu\": {\n"
@@ -106,6 +116,18 @@ void write_json_statistics(std::ostream& output, const RunStatistics& statistics
     histogram_json(output, statistics.versions_after);
     output << ",\n  \"spacecraft_after\": ";
     histogram_json(output, statistics.spacecraft_after);
+    if (statistics.rs) {
+        const auto& rs = *statistics.rs;
+        output << ",\n  \"rs\": {\n"
+               << "    \"good_frames\": " << rs.good_frames << ",\n"
+               << "    \"corrected_frames\": " << rs.corrected_frames << ",\n"
+               << "    \"uncorrectable_frames\": " << rs.uncorrectable_frames << ",\n"
+               << "    \"corrected_symbols_per_lane\": [";
+        for (std::size_t i = 0; i < rs_interleave; ++i) output << (i ? ", " : "") << rs.corrected_symbols[i];
+        output << "],\n    \"uncorrectable_lanes\": [";
+        for (std::size_t i = 0; i < rs_interleave; ++i) output << (i ? ", " : "") << rs.uncorrectable_lanes[i];
+        output << "]\n  }";
+    }
     if (statistics.frames) {
         output << ",\n  \"frames\": {\n";
         for (const auto& [name, value] : frame_counters(*statistics.frames)) output << "    \"" << name << "\": " << value << ",\n";

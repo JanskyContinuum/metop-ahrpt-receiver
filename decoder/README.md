@@ -1,12 +1,12 @@
-# C++ CADU decoder — Milestone 4
+# C++ CADU decoder — Milestone 5
 
 M1 provides CADU framing inspection; M2 adds the **CCSDS derandomizer and header
 diagnostics**. The decoder validates the `1A CF FC 1D` ASM, recovers byte alignment,
-and XORs all 1020 following bytes. M3 adds **VCDU/M-PDU inspection with explicit
-`--no-rs`**. M4 adds **Space Packet reassembly across VCDUs** in that mode. RS correction
-and images are not yet implemented.
-Output explicitly reports `rs_applied: false`. Without `--no-rs`, the program
-retains M2 diagnostic behaviour and does not invoke the VCDU/M-PDU parsers.
+and XORs all 1020 following bytes. M3 adds VCDU/M-PDU inspection; M4 adds
+Space Packet reassembly across VCDUs. **M5 applies CCSDS RS(255,223), interleave 4,
+with dual-basis conversion before parsing packets by default.** Uncorrectable
+frames are reported and rejected. `--no-rs` retains the uncorrected comparison
+path. AVHRR payload decoding and images are not implemented.
 
 MATLAB/Simulink performs the existing physical-layer processing, including QPSK
 demodulation, Viterbi decoding, and CADU alignment. Its binary output is the input
@@ -66,11 +66,11 @@ multi-configuration builds normally produce `build/Release/metop_decoder.exe`.
 
 | Option | Implemented behaviour |
 | --- | --- |
-| `--out DIR` | Required; create DIR and write `stats.txt` and `stats.json`. Existing statistics files are replaced. |
+| `--out DIR` | Required; create DIR and write statistics plus RS, VCDU and packet CSV logs. Existing output files are replaced. |
 | `--dump-stats` | Print full statistics for the selected mode instead of the short summary. |
 | `--max-cadus N` | Stop after N accepted CADUs; N must be a positive 64-bit integer. |
 | `--verbose` | Write each accepted CADU's zero-based ordinal and original byte offset to stderr. |
-| `--no-rs` | M4: inspect frames, reconstruct Space Packets without RS, and write `vcdu_log.csv` / `packet_log.csv` in DIR. |
+| `--no-rs` | Bypass RS and parse uncorrected VCDUs/packets. All logs explicitly label RS as `not_applied`. |
 | `--help` | Show usage without opening input/output files. |
 
 Quote paths containing spaces. Windows uses its native wide command line so
@@ -81,10 +81,10 @@ the ASM. M2 derandomizes its in-memory copy; the ASM is preserved.
 
 Exit codes:
 
-- **0:** at least one complete CADU accepted and, in `--no-rs` mode, at least one
+- **0:** at least one complete CADU accepted and at least one
   M-PDU with a valid FHP (or help displayed). Recoverable anomalies are reported
   to stderr and in statistics, without stopping the entire run.
-- **1:** no accepted CADUs, no M-PDUs with valid FHPs in `--no-rs` mode, or an
+- **1:** no accepted CADUs, no M-PDUs with valid FHPs (including all-RS-rejected input), or an
   input/output failure. Empty, garbage-only, and
   truncated-only files still produce statistics when output is writable.
 - **2:** invalid command-line arguments.
@@ -105,8 +105,8 @@ reported as trailing bytes on the next read.
 
 This conservative recovery can omit an otherwise good last CADU after loss of
 alignment. It avoids silently accepting an isolated payload marker as a recovered
-boundary. Even two matching markers cannot establish payload integrity; these
-milestones cannot detect or correct payload errors. RS validation is later work.
+boundary. Matching markers alone do not establish payload integrity. M5 checks
+RS parity after framing and derandomization; the bypass mode does not.
 
 The reader uses a fixed 1028-byte circular lookahead buffer and returns one CADU
 at a time. Memory use does not grow with capture size. Tests compare every emitted
@@ -114,13 +114,14 @@ byte and its original offset, including recovery across circular-buffer wraps.
 
 ## Statistics definitions
 
-The JSON declares `schema_version: 4`, `stage: "derandomization_diagnostics"`
-(default) or `"space_packets_no_rs"`, and `rs_applied: false`. CADU counters retain
-their M1 meanings. Sparse histograms
+The JSON declares `schema_version: 5`, `stage: "space_packets_rs"` and
+`rs_applied: true` by default; `--no-rs` uses `"space_packets_no_rs"` and false.
+CADU counters retain their M1 meanings. Sparse histograms
 `vcids_before`, `vcids_after`, `versions_after`, and `spacecraft_after` contain
 observations from every accepted CADU; no unexpected values are filtered out.
 They are diagnostic bit extractions, not RS-validated headers. APID and image
-statistics remain absent. `frames` is present only in explicit `--no-rs` mode.
+statistics remain absent. `frames` and `packets` are present in both modes;
+`rs` is present only when correction is enabled (see M5 below).
 
 | Field | Meaning |
 | --- | --- |
@@ -161,8 +162,8 @@ exit codes, help, argument rejection, limits, recovery, JSON parsing and counter
 text/JSON consistency, verbose offsets, output failures, and input preservation.
 Tests remain active in Release builds; they do not rely on `assert`.
 
-All fixtures are synthetic and generated in memory or under the ignored build
-directory. The local `metop_output.cadu` is not required by CTest and must not be
+Fixtures are synthetic. Small independent RS reference vectors are checked in
+with provenance; generated recordings stay under the ignored build directory. The local `metop_output.cadu` is not required by CTest and must not be
 committed. Its initial independently inspected framing baseline is 13,862,912
 bytes, 13,538 aligned CADUs, and zero trailing bytes.
 
@@ -340,7 +341,7 @@ that must remain visible until RS correction and packet reassembly are available
 
 ## M4 Space Packet reassembly
 
-Run with `--no-rs` to enable M4. The default invocation remains M2 diagnostics.
+M4 reassembly runs after RS by default; `--no-rs` retains the M4 bypass path.
 `space_packet` parses primary headers; `packet_reassembler` owns partial bytes
 and returns complete packets, including their six-byte headers, by value.
 The CLI consumes these packets to write `packet_log.csv`; it does not save
@@ -415,8 +416,9 @@ JSON schema 4 adds `packets` in `--no-rs` mode and uses stage
 Exit status retains the inspection contract: zero indicates successful processing
 with at least one structurally valid M-PDU, not successful instrument decoding
 or a guarantee of any reconstructed packets. Anomalies appear in stderr and
-statistics. All packet data remain uncorrected; no checksum, secondary-header
-format, AVHRR layout, or payload validity is claimed.
+statistics. In bypass mode all data remain uncorrected. Even after RS, no
+packet checksum, secondary-header format, AVHRR layout, or payload validity
+is claimed.
 
 ### M4 validation
 
@@ -436,6 +438,114 @@ packet, exactly 2646 bytes total, without truncations or invalid headers.
 Stopping after two CADUs emits no packet and reports one 1764-byte partial.
 The maximum-length test reconstructs all 65,542 bytes across 75 M-PDUs.
 
+
+## M5 CCSDS Reed-Solomon
+
+The default pipeline is:
+
+```text
+1024-byte CADU -> validate ASM -> XOR all 1020 CVCDU bytes
+-> deinterleave 4 x 255 dual-basis symbols -> correct each lane
+-> reconstruct 892 dual-basis data bytes -> VCDU/M-PDU -> Space Packets
+```
+
+The parameters are fixed to the MetOp profile, not generic RS defaults:
+
+| Parameter | Implemented value |
+| --- | --- |
+| Code | RS(255,223), 32 parity symbols, up to 16 unknown erroneous symbols per lane |
+| Field | GF(256), polynomial x^8+x^7+x^2+x+1 (`0x187`), alpha represented by 02 |
+| Generator | Product of (x - alpha^(11*j)), j = 112..143 |
+| Representation | CCSDS dual basis on input/output; conventional polynomial basis internally |
+| Dual basis definition | Dual of {1, beta, ..., beta^7}, beta = alpha^117; z0 transmitted MSB first |
+| Interleaving | I=4; lane l, symbol i comes from CVCDU[4*i+l] |
+| Shortening / erasures | None; full 255-symbol codewords, no supplied erasure positions |
+
+These requirements and the conversion matrices come from
+[CCSDS 131.0-B-5](https://ccsds.org/Pubs/131x0b5.pdf), sections 4.3.3–4.3.9 and
+4.4.2. `reed_solomon` independently implements syndrome evaluation,
+Berlekamp–Massey, Chien search and a GF linear solve for error magnitudes.
+It checks all 32 syndromes again before accepting corrected bytes. Data and
+parity errors both count as corrected symbols. Reconstruction takes the first
+223 symbols of each corrected lane, interleaved in the original order.
+
+If any lane fails, no VCDU from that frame reaches the parsers. All pending
+packet fragments are invalidated because even the spacecraft/VCID header may
+be damaged; counter history is retained. Recovery starts at a later trusted
+FHP. This is conservative and can discard partial packets on other VCIDs.
+
+RS checking is not a checksum or an absolute integrity guarantee. With more
+than 16 erroneous symbols in one lane, an RS decoder may reject, miscorrect,
+or accept another valid codeword. Tests of 17-error patterns assert rejection
+of those particular patterns, not universal detection beyond the correction
+radius. No malformed data is padded or cropped.
+
+### Logs and counters
+
+All runs replace `stats.txt`, `stats.json`, `rs_log.csv`, `vcdu_log.csv`,
+and `packet_log.csv`. Use separate output directories for RS/bypass comparisons.
+
+- `rs_log.csv`: one row per accepted CADU, with original index/offset, status
+  `good`, `corrected`, `uncorrectable`, or `not_applied`, and four lane
+  correction counts. A failed lane has -1; bypass lane fields are empty.
+- `vcdu_log.csv`: only RS-accepted frames in normal mode, every frame in bypass
+  mode. `rs_status` is good/corrected/not_applied. Structurally valid M-PDUs are
+  labelled `valid` after RS, or `uncorrected` in bypass.
+- `packet_log.csv`: `rs_status=rs_checked` means every contributing frame
+  passed RS. It does not claim a packet was entirely error-free before
+  correction. Bypass uses `not_applied`.
+- `rs.good_frames`: all lanes had zero syndromes without changes.
+- `rs.corrected_frames`: all lanes passed and at least one symbol changed.
+- `rs.uncorrectable_frames`: at least one lane failed; whole frame rejected.
+- `rs.corrected_symbols_per_lane`: four cumulative counts in lane order 0..3,
+  including successful lane corrections in a frame rejected by another lane.
+- `rs.uncorrectable_lanes`: four cumulative lane-failure counts.
+
+The three frame counts sum to `cadu.cadus_read`. `frames.vcids` counts only
+accepted version-1 headers after correction; M2 diagnostic histograms still
+describe uncorrected bytes immediately after XOR. M3/M4 validation numbers
+above are historical bypass results.
+
+### M5 validation
+
+Windows Release with GCC 14.2.0 / MinGW-w64 passes **116/116 CTest cases**.
+The new RS unit cases verify all 256 basis conversions against an independent
+field-trace calculation; external nonzero codewords; rejection of a conventional
+basis word presented as dual; all 255 single-error positions on two words;
+384 deterministic 1–16-error trials; exact deinterleaving and reconstruction;
+and every position of a 64-byte burst in a CVCDU (16 errors per lane), including
+parity. They also check rejected-input immutability, length bounds, and counters.
+
+The CLI cases exercise derandomization plus RS plus three-frame packet
+reassembly, header/FHP correction, whole-frame rejection, recovery, duplicate
+suppression across an RS failure, partial packets at a limit, bypass,
+output failures and input preservation. Older framing fixtures without parity
+now explicitly select `--no-rs`.
+
+The nonzero fixtures were generated with an independent libfec CCSDS encoder,
+not an encoder from this implementation. Its source is neither vendored nor
+linked into this project. See [vector provenance and regeneration](tests/reference/README.md)
+for the pinned revision, parameters, generator and hashes.
+
+The existing local 13,538-CADU capture produced:
+
+| Observation | With RS | --no-rs |
+| --- | ---: | ---: |
+| Good / corrected / rejected frames | 32 / 6750 / 6756 | not checked |
+| Headers presented to parsers | 6782 | 13538 |
+| Invalid VCDU versions | 0 | 120 |
+| Invalid FHP | 0 | 796 |
+| Invalid Space Packet headers | 0 | 475 |
+| Packet boundary mismatches | 0 | 60 |
+| Reconstructed non-idle packets | 141 | 666 |
+
+Lane correction totals were [53616, 54079, 53666, 53463], including successful
+lanes in rejected frames. Packet counts are not directly comparable as a
+quality metric: bypass can emit corrupted packets, while RS discards damaged
+frames and conservatively clears fragments. The RS run reported 465 discarded
+partial candidates; losses remain visible. These observations support the
+selected field/basis/interleave conventions but do not validate AVHRR payloads.
+
 ## Requirements and subsequent work
 
 The current engineering specification is `../CODEX_METOP_CADU_AVHRR_DECODER.md`
@@ -448,7 +558,7 @@ and [CCSDS TM Synchronization and Channel Coding](https://ccsds.org/Pubs/131x0b5
 M3 field geometry follows specification sections 7–10. Version, idle-frame,
 counter, and FHP behaviour also reference
 [CCSDS AOS 732.0-B-4](https://ccsds.org/Pubs/732x0b4.pdf), sections 4.1.2 and 4.1.4.2.
-M4 packet reassembly implements specification sections 11–12. M5 RS correction
-and M6 AVHRR inspection remain subsequent work.
+M4 packet reassembly implements specification sections 11–12. M5 implements
+CCSDS RS correction. M6 AVHRR packet inspection remains subsequent work.
 AVHRR sample offsets and scan-to-packet mapping must be verified before instrument
 decoding. The eventual raw image width is exactly 2048 Earth-view samples.
