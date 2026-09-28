@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(metop_core src/cadu_reader.cpp src/cli.cpp src/statistics.cpp
     src/ccsds_randomizer.cpp src/vcdu.cpp src/mpdu.cpp src/frame_inspector.cpp
-    src/space_packet.cpp src/packet_reassembler.cpp src/reed_solomon.cpp src/avhrr.cpp)
+    src/space_packet.cpp src/packet_reassembler.cpp src/reed_solomon.cpp src/avhrr.cpp src/sample_unpack.cpp src/avhrr_payload.cpp)
 target_include_directories(metop_core PUBLIC src)
 add_executable(metop_decoder src/main.cpp)
 target_link_libraries(metop_decoder PRIVATE metop_core)
@@ -28,6 +28,20 @@ metop_warnings(metop_decoder)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(avhrr_payload_tests tests/avhrr_payload_tests.cpp)
+    target_link_libraries(avhrr_payload_tests PRIVATE metop_core)
+    metop_warnings(avhrr_payload_tests)
+    foreach(case IN ITEMS packing bit_bounds geometry truncated headers vpc metadata processor reassembly output_failure)
+        add_test(NAME avhrr_payload.${case} COMMAND avhrr_payload_tests ${case})
+    endforeach()
+    foreach(case IN ITEMS complete partial collision output_failure)
+        add_test(NAME avhrr_payload_cli.${case} COMMAND ${CMAKE_COMMAND}
+            "-DDECODER=$<TARGET_FILE:metop_decoder>"
+            "-DFIXTURE=$<TARGET_FILE:avhrr_payload_tests>"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/avhrr-payload-cli-tests/${case}"
+            "-DCASE=${case}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/avhrr_payload_cli.cmake")
+    endforeach()
+
     add_executable(avhrr_tests tests/avhrr_tests.cpp)
     target_link_libraries(avhrr_tests PRIVATE metop_core)
     metop_warnings(avhrr_tests)
