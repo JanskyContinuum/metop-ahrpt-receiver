@@ -6,6 +6,7 @@
 #include "reed_solomon.h"
 #include "avhrr.h"
 #include "avhrr_payload.h"
+#include "image_writer.h"
 
 #include <filesystem>
 #include <iosfwd>
@@ -25,6 +26,7 @@ struct RunStatistics {
     std::optional<PacketStatistics> packets;
     AvhrrStatistics avhrr;
     AvhrrScanStatistics avhrr_scans;
+    ImageStatistics images;
     bool stopped_by_limit = false;
 };
 

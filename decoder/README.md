@@ -1,4 +1,4 @@
-# C++ CADU decoder — Milestones 7 and 8
+# C++ CADU decoder — Milestone 9
 
 M1 provides CADU framing inspection; M2 adds the **CCSDS derandomizer and header
 diagnostics**. The decoder validates the `1A CF FC 1D` ASM, recovers byte alignment,
@@ -9,7 +9,8 @@ frames are reported and rejected. `--no-rs` retains the uncorrected comparison
 path. M6 inspects VCID 9 / APID 103–104 packets, reports lengths and header
 fields, and can dump complete packets. M7 documents the verified AVHRR HR layout;
 M8 validates VPC and reconstructs raw ten-bit scans with 2048 Earth samples per
-active channel. Image rendering is not implemented.
+active channel. M9 writes these counts as separate binary PGM P5 images;
+no calibration, geolocation or contrast enhancement is applied.
 
 MATLAB/Simulink performs the existing physical-layer processing, including QPSK
 demodulation, Viterbi decoding, and CADU alignment. Its binary output is the input
@@ -119,7 +120,7 @@ byte and its original offset, including recovery across circular-buffer wraps.
 
 ## Statistics definitions
 
-The JSON declares `schema_version: 8`, `stage: "space_packets_rs"` and
+The JSON declares `schema_version: 9`, `stage: "space_packets_rs"` and
 `rs_applied: true` by default; `--no-rs` uses `"space_packets_no_rs"` and false.
 CADU counters retain their M1 meanings. Sparse histograms
 `vcids_before`, `vcids_after`, `versions_after`, and `spacecraft_after` contain
@@ -127,7 +128,8 @@ observations from every accepted CADU; no unexpected values are filtered out.
 They are diagnostic bit extractions, not RS-validated headers. `frames`,
 `packets` and `avhrr` are present in both modes; `rs` is present only when
 correction is enabled. `avhrr_scans` reports payload acceptance/rejection and
-channel-3 mode counts; image statistics remain absent.
+channel-3 mode counts. `images` reports files, streams, accepted scans, width,
+maxval and total row counts per semantic channel.
 
 | Field | Meaning |
 | --- | --- |
@@ -627,16 +629,15 @@ the RS path. Each rejected candidate has one reason; earlier checks take precede
 The library entry point `decode_avhrr_packet` returns an `AvhrrScan` or a
 rejection. `AvhrrScanProcessor` streams scans through an optional callback.
 Earth, space and back-scan arrays remain separate; ramp and temperature words
-are preserved in wire order. The CLI currently exports scan metadata only;
-raw sample arrays are available through the library for M9. No images,
-calibrated radiances, missing-row fillers or inactive-channel arrays are produced.
+are preserved in wire order. M9 consumes those arrays to write raw PGM files, as described below.
+No calibrated radiances, missing-row fillers or inactive-channel arrays are produced.
 
 The exact 12966-byte profile, header fields, VPC, time ranges, SBT reserved byte
 and two filler bits are checked. Invalid packets stay visible in the M6 logs
 and optional packet dumps. `--no-rs` still checks VPC and records the bypass.
 Recoverable payload errors do not change the existing CLI exit-code contract.
 
-The complete local Release suite passes **148/148 tests**. New coverage includes
+The M8 baseline passed **148/148 tests**. Its coverage includes
 all ten-bit values at multiple bit alignments, a literal packed vector,
 overflow/bounds checks, all truncation lengths, both channel-3 modes,
 every Earth sample and field boundary, VPC and metadata rejection,
@@ -647,6 +648,69 @@ On the local capture: RS enabled yields **9 accepted 3A scans, 0 rejected
 payloads**. Each has five times 2048 raw Earth samples. RS bypass yields
 13 candidates, all rejected by VPC. No real APID-104 packet is available;
 3B is covered synthetically.
+
+## M9 raw PGM images
+
+Run from the repository root after building:
+
+```powershell
+.\build\metop_decoder.exe metop_output.cadu --out decoded-m9 --dump-stats
+```
+
+Choose a fresh output directory for each pass. `DIR/avhrr` must be absent or
+empty; a nonempty image directory is rejected before any existing logs are
+truncated. This prevents stale channel images surviving a rerun with different
+channel-3 modes. Input data and pre-existing image files are not overwritten.
+
+Images are grouped by spacecraft, VCID and replay flag, for example:
+
+```text
+decoded-m9/avhrr/scid_11_vcid_9_replay_0/
+  ch1_raw.pgm
+  ch2_raw.pgm
+  ch3a_raw.pgm
+  ch4_raw.pgm
+  ch5_raw.pgm
+  scan_rows.csv
+  metadata.json
+```
+
+Each PGM is P5, width 2048, Maxval 1023. Samples are unsigned two-byte
+most-significant-byte-first integers. Counts remain exactly 0..1023; no gamma,
+left shift, calibration or contrast stretch is applied. This uses the
+[Netpbm PGM binary container](https://netpbm.sourceforge.net/doc/pgm.html)
+for raw sensor counts rather than display-calibrated intensities.
+
+Height is the number of accepted scans containing that channel. Common channels
+1/2/4/5 have every accepted row in a stream. 3A and 3B each contain only their
+active scans; an absent channel produces no file. `scan_rows.csv` maps each scan
+to zero-based per-channel rows (blank for an inactive channel), packet sequence,
+UTC fields and VCDU counters. Rows retain arrival order, without filling gaps,
+flipping axes or projecting onto a map.
+
+The writer validates all five lines before accepting a scan: exactly 2048
+samples and every count <=1023. Only the M8 acceptance callback feeds it.
+Raster data is spooled to temporary files with bounded buffers, then finalized
+with the exact header/height; spools are removed on success or normal exception
+cleanup. A killed process may leave temporary files. On an I/O failure, the
+program exits 1; discard that incomplete output directory and rerun elsewhere.
+Successfully finalized channel files from an earlier step may remain after a
+later output failure. Zero accepted scans produce zero images; the existing
+transport-oriented exit-code contract is unchanged, so check `images.scans`.
+
+JSON schema 9 adds `images`, with `channel_rows` totals across all source
+streams. Each stream's `metadata.json` records its own geometry, channel
+filenames, RS/VPC provenance and arrival-order/no-padding policy.
+
+The full Release suite passes **160/160 tests**. M9 adds header, dimensions,
+sample preservation (all 0..1023), byte order, exact raster size, invalid
+width/value rejection, empty output, mode switching, source isolation,
+I/O failure and CLI integration tests.
+
+The real capture produces five **2048 x 9** images, each **36879 bytes**.
+All 92160 saved samples were compared against independent packet-bit extraction.
+See [M9 capture results and visible limitations](docs/avhrr-image-output.md).
+No preview-generation option is added; M10 remains future work.
 
 ## Requirements and subsequent work
 
@@ -662,5 +726,5 @@ counter, and FHP behaviour also reference
 [CCSDS AOS 732.0-B-4](https://ccsds.org/Pubs/732x0b4.pdf), sections 4.1.2 and 4.1.4.2.
 M4 packet reassembly implements specification sections 11–12. M5 implements
 CCSDS RS correction. M6 adds AVHRR packet inspection; M7 verifies and documents
-the payload profile; M8 reconstructs raw scans. M9 image output and M10 previews
-remain subsequent work. The raw scan width is exactly 2048 Earth-view samples.
+the payload profile; M8 reconstructs raw scans; M9 writes raw PGM images.
+M10 previews remain subsequent work. Width is exactly 2048 Earth-view samples.

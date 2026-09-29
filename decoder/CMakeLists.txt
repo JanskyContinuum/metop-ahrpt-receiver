@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(metop_core src/cadu_reader.cpp src/cli.cpp src/statistics.cpp
     src/ccsds_randomizer.cpp src/vcdu.cpp src/mpdu.cpp src/frame_inspector.cpp
-    src/space_packet.cpp src/packet_reassembler.cpp src/reed_solomon.cpp src/avhrr.cpp src/sample_unpack.cpp src/avhrr_payload.cpp)
+    src/space_packet.cpp src/packet_reassembler.cpp src/reed_solomon.cpp src/avhrr.cpp src/sample_unpack.cpp src/avhrr_payload.cpp src/image_writer.cpp)
 target_include_directories(metop_core PUBLIC src)
 add_executable(metop_decoder src/main.cpp)
 target_link_libraries(metop_decoder PRIVATE metop_core)
@@ -28,6 +28,20 @@ metop_warnings(metop_decoder)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(image_writer_tests tests/image_writer_tests.cpp)
+    target_link_libraries(image_writer_tests PRIVATE metop_core)
+    metop_warnings(image_writer_tests)
+    foreach(case IN ITEMS header invalid empty modes streams invalid_scan failures)
+        add_test(NAME image.${case} COMMAND image_writer_tests ${case} "${CMAKE_CURRENT_BINARY_DIR}/image-tests/${case}")
+    endforeach()
+    foreach(case IN ITEMS complete partial bad_vpc existing collision)
+        add_test(NAME image_cli.${case} COMMAND ${CMAKE_COMMAND}
+            "-DDECODER=$<TARGET_FILE:metop_decoder>" "-DFIXTURE=$<TARGET_FILE:avhrr_payload_tests>"
+            "-DIMAGE_TESTS=$<TARGET_FILE:image_writer_tests>"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/image-cli-tests/${case}"
+            "-DCASE=${case}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/image_cli.cmake")
+    endforeach()
+
     add_executable(avhrr_payload_tests tests/avhrr_payload_tests.cpp)
     target_link_libraries(avhrr_payload_tests PRIVATE metop_core)
     metop_warnings(avhrr_payload_tests)

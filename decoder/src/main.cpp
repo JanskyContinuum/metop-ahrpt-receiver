@@ -7,6 +7,7 @@
 #include "reed_solomon.h"
 #include "avhrr.h"
 #include "avhrr_payload.h"
+#include "image_writer.h"
 
 #include <filesystem>
 #include <fstream>
@@ -56,6 +57,7 @@ int run(std::span<const std::string_view> arguments) {
             if (std::filesystem::exists(destination) && std::filesystem::equivalent(options.input, destination))
                 throw std::runtime_error("AVHRR debug output would overwrite the input file");
         }
+        metop::AvhrrImageWriter images(options.output / "avhrr", !options.no_rs);
         std::filesystem::create_directories(options.output / "debug");
         std::ofstream avhrr_log(options.output / "debug" / "packet_log.csv", std::ios::binary | std::ios::trunc);
         if (!avhrr_log) throw std::runtime_error("Cannot open AVHRR packet log");
@@ -73,7 +75,8 @@ int run(std::span<const std::string_view> arguments) {
                                     dump_streams, options.dump_debug ? &std::cout : nullptr);
         std::ofstream scan_log(options.output / "avhrr_scan_log.csv", std::ios::binary | std::ios::trunc);
         if (!scan_log) throw std::runtime_error("Cannot open AVHRR scan log");
-        metop::AvhrrScanProcessor scans(scan_log, !options.no_rs);
+        metop::AvhrrScanProcessor scans(scan_log, !options.no_rs,
+            [&](const auto& packet, const auto& scan) { images.add(packet, scan); });
         metop::RunStatistics statistics;
         statistics.input_size = std::filesystem::file_size(options.input);
         std::ofstream frame_log;
@@ -179,15 +182,18 @@ int run(std::span<const std::string_view> arguments) {
                 if (!dump) throw std::runtime_error("Failed to close AVHRR binary packet dump");
             }
         }
+        images.finish();
+        statistics.images = images.statistics();
         metop::save_statistics(options.output, statistics);
         if (options.dump_stats) {
             metop::write_text_statistics(std::cout, statistics);
         } else {
-            std::cout << (options.no_rs ? "M8 AVHRR scan decoding (RS not applied)" : "M8 AVHRR scan decoding (RS checked)")
+            std::cout << (options.no_rs ? "M9 raw AVHRR image output (RS not applied)" : "M9 raw AVHRR image output (RS checked)")
                       << ": " << statistics.cadu.cadus_read << " CADUs, "
                       << statistics.cadu.resyncs << " resyncs, "
                       << statistics.cadu.skipped_bytes << " skipped bytes, "
-                      << statistics.cadu.trailing_bytes << " trailing bytes"
+                      << statistics.cadu.trailing_bytes << " trailing bytes, "
+                      << statistics.images.files << " PGM files from " << statistics.images.scans << " scans"
                       << (statistics.stopped_by_limit ? " (CADU limit reached)" : "") << '\n';
         }
         if (statistics.cadu.asm_failures || statistics.cadu.trailing_bytes) {

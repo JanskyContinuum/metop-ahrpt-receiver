@@ -192,9 +192,11 @@ int main(int argc, char** argv) {
             try{processor.consume(reassembled(make_packet()),0);}catch(const std::runtime_error&){threw=true;}
             require(threw,"Scan log failure ignored");
         } else if(test=="fixture") {
-            require(argc==3,"Fixture path missing");
+            require(argc==3 || (argc==4 && std::string_view(argv[3])=="bad_vpc"),"Fixture path/mode missing");
             std::ofstream out(std::filesystem::path(std::u8string(std::string_view(argv[2]).begin(), std::string_view(argv[2]).end())),std::ios::binary);
-            for(const auto& f:frames()) {
+            auto fixture_frames=frames();
+            if(argc==4) fixture_frames.front()[30]^=1; // Break only the first packet VPC.
+            for(const auto& f:fixture_frames) {
                 std::array<std::uint8_t,1024> cadu{};cadu[0]=0x1a;cadu[1]=0xcf;cadu[2]=0xfc;cadu[3]=0x1d;
                 std::copy(f.begin(),f.end(),cadu.begin()+4);
                 metop::derandomize(std::span(cadu).subspan<4, 1020>());

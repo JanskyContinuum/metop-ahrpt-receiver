@@ -78,7 +78,7 @@ string(JSON packets GET "${json}" packets reconstructed)
 string(JSON truncated GET "${json}" packets truncated_packets)
 string(JSON duplicates GET "${json}" packets duplicate_frames)
 string(JSON count GET "${json}" cadu cadus_read)
-if(NOT schema EQUAL 8 OR NOT packets EQUAL expected_packets OR NOT count EQUAL expected_count
+if(NOT schema EQUAL 9 OR NOT packets EQUAL expected_packets OR NOT count EQUAL expected_count
    OR NOT truncated EQUAL expected_truncated OR NOT duplicates EQUAL expected_duplicates)
     message(FATAL_ERROR "Incorrect packet/frame statistics: ${json}")
 endif()

@@ -48,7 +48,7 @@ void histogram_text(std::ostream& output, const char* label, const std::array<st
 
 void write_text_statistics(std::ostream& output, const RunStatistics& statistics) {
     const auto& c = statistics.cadu;
-    output << "Stage: " << (statistics.rs ? "M8 AVHRR scan decoding (RS checked)" : "M8 AVHRR scan decoding (RS not applied)")
+    output << "Stage: " << (statistics.rs ? "M9 raw AVHRR image output (RS checked)" : "M9 raw AVHRR image output (RS not applied)")
            << '\n'
            << "Input size: " << statistics.input_size << " bytes\n"
            << "CADUs read: " << c.cadus_read << '\n'
@@ -90,11 +90,12 @@ void write_text_statistics(std::ostream& output, const RunStatistics& statistics
     }
     write_avhrr_text(output, statistics.avhrr);
     write_avhrr_scan_text(output, statistics.avhrr_scans);
+    write_image_text(output, statistics.images);
 }
 
 void write_json_statistics(std::ostream& output, const RunStatistics& statistics) {
     const auto& c = statistics.cadu;
-    output << "{\n  \"schema_version\": 8,\n  \"stage\": \""
+    output << "{\n  \"schema_version\": 9,\n  \"stage\": \""
            << (statistics.rs ? "space_packets_rs" : "space_packets_no_rs") << "\",\n"
            << "  \"rs_applied\": " << (statistics.rs ? "true" : "false") << ",\n"
            << "  \"input_size\": " << statistics.input_size << ",\n"
@@ -151,6 +152,8 @@ void write_json_statistics(std::ostream& output, const RunStatistics& statistics
     write_avhrr_json(output, statistics.avhrr);
     output << ",\n  \"avhrr_scans\": ";
     write_avhrr_scan_json(output, statistics.avhrr_scans);
+    output << ",\n  \"images\": ";
+    write_image_json(output, statistics.images);
     output << "\n}\n";
 }
 
