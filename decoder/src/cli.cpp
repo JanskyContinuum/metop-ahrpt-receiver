@@ -8,7 +8,7 @@ namespace metop {
 
 std::string_view usage() {
     return "Usage: metop_decoder <input.cadu> --out <directory> [options]\n"
-           "M8: CCSDS RS, Space Packet reassembly and raw AVHRR scan decoding.\n"
+           "M9: CCSDS RS, Space Packet reassembly and raw AVHRR PGM images.\n"
            "  --no-rs        Bypass RS explicitly; parse uncorrected VCDUs/packets\n"
            "  --max-cadus N  Stop after N accepted CADUs (positive integer)\n"
            "  --dump-stats   Print full statistics; stats.txt/json are always saved\n"

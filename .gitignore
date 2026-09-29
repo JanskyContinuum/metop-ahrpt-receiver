@@ -2,7 +2,10 @@
 *.cs16
 *.cadu
 *.bin
+*.pgm
+*.raster.tmp
 decoded/
+decoded-*/
 output/
 debug/
 
