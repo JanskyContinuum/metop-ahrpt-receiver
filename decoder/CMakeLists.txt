@@ -28,6 +28,12 @@ metop_warnings(metop_decoder)
 
 include(CTest)
 if(BUILD_TESTING)
+    # Display previews are optional; the C++ decoder has no Python dependency.
+    find_package(Python3 3.10 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME preview.png COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p test_pgm_preview.py -v)
+    endif()
     add_executable(image_writer_tests tests/image_writer_tests.cpp)
     target_link_libraries(image_writer_tests PRIVATE metop_core)
     metop_warnings(image_writer_tests)

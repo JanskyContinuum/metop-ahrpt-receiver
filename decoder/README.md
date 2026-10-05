@@ -710,7 +710,8 @@ I/O failure and CLI integration tests.
 The real capture produces five **2048 x 9** images, each **36879 bytes**.
 All 92160 saved samples were compared against independent packet-bit extraction.
 See [M9 capture results and visible limitations](docs/avhrr-image-output.md).
-No preview-generation option is added; M10 remains future work.
+The C++ executable has no preview-generation option; use the separate Python
+tool below for display PNGs.
 
 ## Requirements and subsequent work
 
@@ -727,4 +728,30 @@ counter, and FHP behaviour also reference
 M4 packet reassembly implements specification sections 11–12. M5 implements
 CCSDS RS correction. M6 adds AVHRR packet inspection; M7 verifies and documents
 the payload profile; M8 reconstructs raw scans; M9 writes raw PGM images.
-M10 previews remain subsequent work. Width is exactly 2048 Earth-view samples.
+A separate Python tool now provides display previews. Width is exactly 2048
+Earth-view samples.
+
+## PNG display previews
+
+Python 3.10+ can convert one stream directory (or one raw PGM) to grayscale PNG:
+
+```sh
+python decoder/tools/pgm_preview.py decoded/pass-01/avhrr/scid_11_vcid_9_replay_0 --out decoded/pass-01/previews
+```
+
+Run from the repository root and replace the stream directory with the one
+created by your decode. Outputs are named `ch1_raw_preview.png`, etc. Choose a
+fresh destination; existing preview files are not overwritten. Only Python's
+standard library is required.
+
+The tool validates P5, width 2048, positive height, Maxval 1023, exact raster
+length and sample range. It preserves dimensions and row order and maps raw
+0–1023 linearly to display 0–255. Raw PGM files remain unchanged. PNGs are
+8-bit display products, not substitutes for the original 10-bit samples.
+There is no calibration, contrast stretch, rotation, geolocation or gap filling.
+
+When CMake finds Python 3.10+, CTest includes `preview.png`, which runs four
+checks for geometry, all 1024 levels, PNG checksums, malformed input and
+overwrite protection. The local Release run passed 161/161 CTest entries
+(including these four Python checks). Without Python, the 160 C++ tests still
+run and the decoder remains usable.
