@@ -14,6 +14,14 @@ debug/
 slprj/
 *_ert_rtw/
 *_grt_rtw/
+*.autosave
+*.asv
+*_cgxe.mex*
+*.slx.r*
+
+# Python preview-tool caches.
+__pycache__/
+*.py[cod]
 
 # Out-of-source builds and temporary compiler products.
 build/
