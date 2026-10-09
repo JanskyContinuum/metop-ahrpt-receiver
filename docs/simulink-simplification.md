@@ -58,6 +58,22 @@ The simplified full run took 3,408.6 wall-clock seconds on the test machine.
 The baseline's recorded wall time includes an extended interruption between
 sessions, so these runs do not support a numerical speedup claim.
 
+The matched baseline control trace first reports signal presence at 44.881920 s
+and channel acquisition plus completed CADUs at 45.066240 s. These are sampled
+observations with 92.16 ms resolution, not exact physical arrival times. Across
+3,928 enabled observations, none had zero emitted symbols. There were six physical
+acquisition attempts (one initial acquisition and five retries) and 22 channel
+acquisitions; lock was therefore not uninterrupted throughout the recording.
+The later physical attempts first appear at 192.983040, 268.554240, 319.979520,
+363.479040 and 404.398080 s. Processing recovered automatically without seeking
+or manually changing phase.
+
+Among observations with a selected channel hypothesis and fourth-power QPSK
+coherence above 0.5, the coarse estimate ranged from +2.172 to -31.047 kHz.
+Low-coherence observations also contain estimator outliers; the full estimate
+range must not be interpreted as satellite Doppler. These measurements support
+continuous tracking and automatic recovery, not a claim that every frame is good.
+
 ## Exactly what was removed
 
 SIDs below refer to `demodulator_metop_r`. Names are the original block names.
@@ -182,6 +198,7 @@ Both complete CADU files were decoded with the existing C++ executable. Their RS
 | RS good frames | 78,194 |
 | RS corrected frames | 32,370 |
 | RS uncorrectable frames | 21,173 |
+| Reconstructed CCSDS packets | 8,637 |
 | Accepted AVHRR scans / APID 103 packets | 1,270 |
 | APID 104 packets | 0 |
 | Raw images | Five, each 2048 x 1270, channels 1/2/3A/4/5 |
@@ -196,6 +213,15 @@ Current full-recording products are under `out/metop-20260731-1022-simplified/`:
 PNG previews use a fixed linear 0-1023 to 0-255 mapping. Raw PGM samples remain
 unchanged. Visual inspection shows clouds and land/coast detail, with a horizontal discontinuity near the lower edge; missing scans are not repaired. There is no calibration, contrast enhancement, rotation, geolocation,
 interpolation or padding.
+
+Final downstream verification on 2026-10-09 reran the C++ decoder on the complete
+simplified CADU file into `out/final-review-20261009/`. It reached EOF, read all
+131,737 CADUs with valid ASMs and no trailing bytes, and reproduced the statistics
+above. All five PGM files matched the earlier output by SHA-256. Each is exactly
+5,201,938 bytes (18 header bytes plus 2048 × 1270 × 2 raster bytes). The preview
+tool validated every raw sample and produced five PNGs with the same dimensions.
+The original completed `out/final-metop.cadu` and simplified CADU also retain
+the identical SHA-256 quoted above.
 
 ## Reproduce and locate evidence
 
