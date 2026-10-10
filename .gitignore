@@ -41,3 +41,5 @@ Testing/
 
 # Future small reference fixtures need documented provenance and explicit names.
 # M1 generates all fixtures in memory or in the build directory.
+
+docs/
