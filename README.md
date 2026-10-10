@@ -289,24 +289,6 @@ status **2** reports invalid command-line arguments. Recoverable data anomalies
 are recorded in the logs and do not automatically fail the whole run.
 
 
-## Tests and documentation
-
-The local Release suite passed **161/161 CTest entries** with Python 3.10+
-available: 160 C++ tests and one entry running four PNG-preview checks.
-Python is optional for building and using the C++ decoder.
-
-MATLAB component tests and a full before/after recording replay verified
-framing, acquisition and EOF termination. GitHub Actions currently runs the
-C++/CTest workflow on Windows Release; the MATLAB recording replay is a
-separate local validation, not part of CI.
-
-| Documentation | Contents |
-| --- | --- |
-| [Simulink README](simulink/README.md) | Complete pipeline, block parameters, IQ input, run options, outputs and MATLAB tests |
-| [Decoder README](decoder/README.md) | CMake/CTest, CLI, CCSDS/AVHRR decoding and raw/preview image formats |
-| [Simplification validation](docs/simulink-simplification.md) | Exact removed blocks, before/after results, hashes and known limitations |
-| [Integration history](docs/simulink-integration.md) | Receiver integration decisions and earlier measurements |
-
 ## Repository layout
 
 ```text
