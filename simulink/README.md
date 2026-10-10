@@ -302,11 +302,6 @@ checks the final source-frame time and EOF stop event, and writes
 `.validation.mat` and `.validation.json` next to the CADU.
 A finite timeout beyond the expected EOF guards the validation run.
 
-The [simplification report](../docs/simulink-simplification.md) records the
-before/after comparison, removed blocks, preserved parameters, test results
-and exact CADU hashes. The [integration report](../docs/simulink-integration.md)
-retains the earlier instrumented model's development history.
-
 ## Troubleshooting
 
 | Symptom | Check |
